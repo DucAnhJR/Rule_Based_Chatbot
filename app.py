@@ -9,6 +9,7 @@ Rule-Based Chatbot với Elasticsearch
 Nếu không có Elasticsearch, chatbot sẽ tự động chuyển sang sử dụng DataFrame
 """
 
+import utils.session
 import pandas as pd
 import re
 from typing import List, Dict, Optional

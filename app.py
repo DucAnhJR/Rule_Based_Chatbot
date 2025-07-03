@@ -1,27 +1,28 @@
 """
-Optimized Rule-Based Chatbot - Focused on Accuracy
+Advanced Rule-Based Chatbot - Top-K Semantic + Normalized Scoring
 """
 
 import pandas as pd
 import re
-from typing import Optional
+from typing import Optional, List, Tuple
 from flask import Flask, request, jsonify
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 import numpy as np
 import unicodedata
 
-class OptimizedChatbot:
+class AdvancedChatbot:
     def __init__(self, data_file: str = 'data.xlsx'):
-        """Khởi tạo chatbot tối ưu"""
+        """Khởi tạo chatbot nâng cao với top-k semantic"""
         print("Loading data...")
         self.data = pd.read_excel(data_file)
         self.data = self.data.dropna(subset=['question', 'answer'])
         self.data['question'] = self.data['question'].astype(str)
         self.data['answer'] = self.data['answer'].astype(str)
         
-        # Preprocessing đơn giản và hiệu quả
+        # Preprocessing nâng cao
         self.data['processed_question'] = self.data['question'].apply(self.preprocess_text)
+        self.data['normalized_question'] = self.data['question'].apply(self.normalize_question)
         
         # Sử dụng keyword có sẵn
         if 'keyword' in self.data.columns:
@@ -29,226 +30,798 @@ class OptimizedChatbot:
         else:
             self.data['keywords'] = ''
         
-        # Tạo TF-IDF đơn giản nhưng hiệu quả
-        all_text = []
-        for _, row in self.data.iterrows():
-            combined = f"{row['processed_question']} {row['keywords']}"
-            all_text.append(combined)
+        # Tạo multiple TF-IDF matrices cho different strategies
+        self._create_tfidf_matrices()
         
-        self.tfidf_vectorizer = TfidfVectorizer(
+        print(f"Loaded {len(self.data)} questions successfully!")
+    
+    def _create_tfidf_matrices(self):
+        """Tạo nhiều TF-IDF matrix cho các chiến lược khác nhau"""
+        
+        # Matrix 1: Processed questions + keywords
+        combined_text1 = []
+        for _, row in self.data.iterrows():
+            text = f"{row['processed_question']} {row['keywords']}"
+            combined_text1.append(text)
+        
+        self.tfidf_vectorizer1 = TfidfVectorizer(
+            max_features=10000,
+            ngram_range=(1, 3),  # Tăng lên 3-gram
+            min_df=1,
+            max_df=0.7,
+            lowercase=True
+        )
+        self.tfidf_matrix1 = self.tfidf_vectorizer1.fit_transform(combined_text1)
+        
+        # Matrix 2: Normalized questions only
+        self.tfidf_vectorizer2 = TfidfVectorizer(
             max_features=8000,
             ngram_range=(1, 2),
             min_df=1,
             max_df=0.8,
             lowercase=True
         )
-        self.tfidf_matrix = self.tfidf_vectorizer.fit_transform(all_text)
+        self.tfidf_matrix2 = self.tfidf_vectorizer2.fit_transform(self.data['normalized_question'].tolist())
         
-        print(f"Loaded {len(self.data)} questions successfully!")
+        # Matrix 3: Original questions
+        self.tfidf_vectorizer3 = TfidfVectorizer(
+            max_features=6000,
+            ngram_range=(2, 4),  # Focus on phrases
+            min_df=1,
+            max_df=0.9,
+            lowercase=True
+        )
+        self.tfidf_matrix3 = self.tfidf_vectorizer3.fit_transform(self.data['question'].str.lower().tolist())
+    
+    def normalize_question(self, text: str) -> str:
+        """Enhanced normalize câu hỏi để tăng khả năng match"""
+        text = self.preprocess_text(text)
+        
+        # Chuẩn hóa câu hỏi patterns
+        question_normalizations = {
+            # Question words normalization
+            r'\b(những|các)\s+': '',
+            r'\b(tại|ở)\s+(fptu?|đại học fpt|trường fpt)\b': 'fpt',
+            r'\b(fptu?|đại học fpt|trường fpt)\s+(có|tại)\b': 'fpt',
+            r'\b(bao nhiêu|mấy)\s+(phút|giờ|thời gian)\b': 'bao nhiêu thời gian',
+            r'\b(bao nhiêu|mấy)\s+(tiền|phí)\b': 'bao nhiêu phí',
+            r'\b(nào|gì)\s*$': '',  # Remove trailing question words
+            r'\b(như thế nào|làm sao|cách nào|ra sao)\b': 'như thế nào',
+            r'\b(ở đâu|tại đâu|chỗ nào|nơi nào)\b': 'ở đâu',
+            r'\b(khi nào|lúc nào|thời gian nào)\b': 'khi nào',
+            
+            # Content normalization
+            r'\b(sinh viên|học sinh|sv)\b': 'sinh viên',
+            r'\b(học phí|chi phí học|phí học)\b': 'học phí',
+            r'\b(ngành học|chuyên ngành|ngành đào tạo)\b': 'ngành học',
+            r'\b(phòng thi|phòng kiểm tra)\b': 'phòng thi',
+            r'\b(điểm thi|kết quả thi)\b': 'điểm thi',
+            r'\b(đại học fpt|trường fpt|fpt university)\b': 'fpt',
+            
+            # Time expressions
+            r'\b(thời gian|giờ giấc|lịch trình)\b': 'thời gian',
+            r'\b(phút|giờ)\b': 'thời gian',
+            
+            # Common phrases
+            r'\b(có được|được không|có thể)\b': 'được',
+            r'\b(cần phải|phải|cần)\b': 'cần',
+            r'\b(và|với|cùng)\b': 'và',
+        }
+        
+        # Apply normalizations
+        for pattern, replacement in question_normalizations.items():
+            text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+        
+        # Remove redundant words
+        redundant_words = ['thì', 'mà', 'rồi', 'đây', 'kia', 'này', 'đó', 'vậy', 'ạ', 'ơi']
+        words = text.split()
+        words = [word for word in words if word not in redundant_words]
+        text = ' '.join(words)
+        
+        # Clean up whitespace
+        text = re.sub(r'\s+', ' ', text)
+        
+        return text.strip()
     
     def preprocess_text(self, text: str) -> str:
-        """Preprocessing đơn giản nhưng hiệu quả"""
+        """Enhanced preprocessing với better synonym handling"""
         if not text:
             return ""
         
         text = str(text).lower().strip()
         text = unicodedata.normalize('NFC', text)
         
-        # Xử lý từ viết tắt quan trọng
-        text = re.sub(r'\bsv\b', 'sinh viên', text)
-        text = re.sub(r'\bfptu\b', 'fpt', text)
-        text = re.sub(r'\bđh\b', 'đại học', text)
-        text = re.sub(r'\bbn\b', 'bao nhiêu', text)
-        text = re.sub(r'\bk\b', 'không', text)
-        text = re.sub(r'\bđc\b', 'được', text)
-        text = re.sub(r'\bvs\b', 'với', text)
-        text = re.sub(r'\bpt\b', 'phòng thi', text)
+        # Enhanced synonym and abbreviation handling
+        text_normalizations = {
+            # Abbreviations
+            r'\b(sv|sinh viên)\b': 'sinh viên',
+            r'\b(fptu?|đại học fpt|trường fpt|fpt university)\b': 'fpt',
+            r'\b(đh|đại học)\b': 'đại học',
+            r'\b(bn|bao nhiêu)\b': 'bao nhiêu',
+            r'\b(k|ko|không)\b': 'không',
+            r'\b(đc|được)\b': 'được',
+            r'\b(vs|với)\b': 'với',
+            r'\b(pt|phòng thi)\b': 'phòng thi',
+            r'\b(mấy|bao nhiêu)\b': 'bao nhiêu',
+            r'\b(tg|thời gian)\b': 'thời gian',
+            r'\b(hp|học phí)\b': 'học phí',
+            r'\b(hs|học sinh)\b': 'sinh viên',
+            
+            # Question words standardization
+            r'\b(như thế nào|làm sao|cách nào|ra sao)\b': 'như thế nào',
+            r'\b(ở đâu|tại đâu|chỗ nào|nơi nào)\b': 'ở đâu',
+            r'\b(khi nào|lúc nào|thời gian nào)\b': 'khi nào',
+            r'\b(bao lâu|mất bao lâu)\b': 'bao lâu',
+            r'\b(có được|được không|có thể)\b': 'được',
+            
+            # Content synonyms
+            r'\b(chi phí|phí tổn|giá cả)\b': 'phí',
+            r'\b(chuyên ngành|ngành đào tạo)\b': 'ngành',
+            r'\b(kiểm tra|bài thi)\b': 'thi',
+            r'\b(học sinh|sinh viên)\b': 'sinh viên',
+            r'\b(giáo viên|thầy cô|giảng viên)\b': 'giảng viên',
+            r'\b(phòng học|lớp học)\b': 'phòng',
+            r'\b(thời khóa biểu|lịch học)\b': 'lịch',
+            
+            # Units and measurements
+            r'\b(triệu|tr)\b': 'triệu',
+            r'\b(nghìn|k)\b': 'nghìn',
+            r'\b(giờ|h)\b': 'giờ',
+            r'\b(phút|ph)\b': 'phút',
+        }
         
-        # Làm sạch
+        # Apply normalizations
+        for pattern, replacement in text_normalizations.items():
+            text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
+        
+        # Clean punctuation and extra spaces
         text = re.sub(r'[^\w\s]', ' ', text)
         text = re.sub(r'\s+', ' ', text)
         
         return text.strip()
     
-    def exact_match(self, user_input: str) -> Optional[str]:
-        """Exact matching"""
-        user_processed = self.preprocess_text(user_input)
+    def top_k_semantic_search(self, user_input: str, k: int = 8) -> List[Tuple[int, float]]:
+        """Top-K semantic search với multiple strategies - tăng k để có nhiều candidate hơn"""
+        candidates = []
         
-        for _, row in self.data.iterrows():
-            if user_processed == row['processed_question']:
-                return row['answer']
+        user_processed = self.preprocess_text(user_input)
+        user_normalized = self.normalize_question(user_input)
+        
+        # Strategy 1: TF-IDF Matrix 1 (processed + keywords)
+        try:
+            input_vector1 = self.tfidf_vectorizer1.transform([user_processed])
+            similarities1 = cosine_similarity(input_vector1, self.tfidf_matrix1).flatten()
+            top_indices1 = np.argsort(similarities1)[-k*2:][::-1]  # Lấy nhiều hơn để rerank
+            for idx in top_indices1:
+                if similarities1[idx] > 0.08:  # Giảm threshold
+                    candidates.append((idx, similarities1[idx] * 1.0, 'tfidf1'))
+        except:
+            pass
+        
+        # Strategy 2: TF-IDF Matrix 2 (normalized)
+        try:
+            input_vector2 = self.tfidf_vectorizer2.transform([user_normalized])
+            similarities2 = cosine_similarity(input_vector2, self.tfidf_matrix2).flatten()
+            top_indices2 = np.argsort(similarities2)[-k*2:][::-1]
+            for idx in top_indices2:
+                if similarities2[idx] > 0.08:
+                    candidates.append((idx, similarities2[idx] * 1.2, 'tfidf2'))
+        except:
+            pass
+        
+        # Strategy 3: TF-IDF Matrix 3 (phrases)
+        try:
+            input_vector3 = self.tfidf_vectorizer3.transform([user_input.lower()])
+            similarities3 = cosine_similarity(input_vector3, self.tfidf_matrix3).flatten()
+            top_indices3 = np.argsort(similarities3)[-k*2:][::-1]
+            for idx in top_indices3:
+                if similarities3[idx] > 0.04:
+                    candidates.append((idx, similarities3[idx] * 0.8, 'tfidf3'))
+        except:
+            pass
+        
+        # Normalize scores và aggregate
+        if candidates:
+            # Group by index
+            score_dict = {}
+            for idx, score, strategy in candidates:
+                if idx not in score_dict:
+                    score_dict[idx] = []
+                score_dict[idx].append(score)
+            
+            # Calculate final scores
+            final_candidates = []
+            for idx, scores in score_dict.items():
+                # Use max + average boost + strategy diversity bonus
+                final_score = max(scores) + (sum(scores) / len(scores)) * 0.3
+                if len(scores) > 1:  # Bonus for multiple strategies
+                    final_score += 0.1
+                final_candidates.append((idx, final_score))
+            
+            # Sort and return top-k
+            final_candidates.sort(key=lambda x: x[1], reverse=True)
+            return final_candidates[:k]
+        
+        return []
+    
+    def exact_match(self, user_input: str) -> Optional[str]:
+        """Exact matching với nhiều variants"""
+        variants = [
+            self.preprocess_text(user_input),
+            self.normalize_question(user_input),
+            user_input.lower().strip()
+        ]
+        
+        for variant in variants:
+            for _, row in self.data.iterrows():
+                question_variants = [
+                    row['processed_question'],
+                    row['normalized_question'],
+                    row['question'].lower().strip()
+                ]
+                if variant in question_variants:
+                    return row['answer']
         return None
     
-    def keyword_match(self, user_input: str) -> Optional[str]:
-        """Keyword matching với scoring thông minh"""
+    def advanced_keyword_match(self, user_input: str) -> Optional[str]:
+        """Advanced keyword matching với context-aware scoring"""
         user_processed = self.preprocess_text(user_input)
+        user_normalized = self.normalize_question(user_input)
         user_words = set(user_processed.split())
+        user_norm_words = set(user_normalized.split())
         
-        # Từ khóa quan trọng với trọng số
+        # Context-aware important words với dynamic weights
+        context_weights = {
+            'ngành': {'học': 1.5, 'fpt': 1.3, 'đại': 1.2, 'trường': 1.2},
+            'học': {'phí': 1.5, 'ngành': 1.3, 'môn': 1.2, 'cách': 1.2},
+            'phí': {'học': 1.5, 'bao': 1.4, 'nhiêu': 1.4, 'tiền': 1.3},
+            'thi': {'phòng': 1.5, 'điểm': 1.3, 'trễ': 1.4, 'cấm': 1.3},
+            'sinh': {'viên': 1.8, 'học': 1.2, 'trường': 1.2},
+            'fpt': {'ngành': 1.3, 'học': 1.2, 'đại': 1.2, 'trường': 1.2}
+        }
+        
+        # Base important words
         important_words = {
-            'ngành': 10, 'học': 8, 'phí': 10, 'điểm': 8, 'thi': 8, 'phòng': 8,
-            'sinh': 6, 'viên': 6, 'fpt': 8, 'môn': 8, 'bao': 6, 'nhiêu': 6,
-            'mấy': 6, 'nào': 5, 'gì': 5, 'những': 5, 'các': 5, 'khi': 5,
-            'ở': 5, 'đâu': 5, 'như': 4, 'thế': 4, 'sao': 4, 'làm': 4
+            'ngành': 18, 'học': 15, 'phí': 18, 'điểm': 15, 'thi': 15, 'phòng': 12,
+            'sinh': 10, 'viên': 10, 'fpt': 15, 'môn': 12, 'bao': 10, 'nhiêu': 10,
+            'mấy': 10, 'khi': 8, 'ở': 8, 'đâu': 8, 'nào': 6, 'gì': 6,
+            'đại': 10, 'trường': 8, 'thời': 8, 'gian': 8, 'cách': 8, 'làm': 6
+        }
+        
+        scored_matches = []
+        
+        for idx, row in self.data.iterrows():
+            question_words = set(row['processed_question'].split())
+            norm_question_words = set(row['normalized_question'].split())
+            
+            score = 0
+            
+            # === CONTEXT-AWARE MATCHING ===
+            # Check for context combinations
+            context_bonus = 0
+            for main_word in user_words:
+                if main_word in context_weights:
+                    for context_word, multiplier in context_weights[main_word].items():
+                        if context_word in user_words and main_word in question_words and context_word in question_words:
+                            context_bonus += important_words.get(main_word, 5) * multiplier
+            
+            score += context_bonus
+            
+            # === EXACT MATCHES ===
+            exact_matches = user_words.intersection(question_words)
+            norm_matches = user_norm_words.intersection(norm_question_words)
+            
+            # Score exact matches với context awareness
+            for word in exact_matches:
+                base_score = important_words.get(word, 4)
+                # Boost if word appears in context
+                if word in context_weights:
+                    context_found = any(cw in user_words for cw in context_weights[word].keys())
+                    if context_found:
+                        base_score *= 1.3
+                score += base_score
+            
+            # Score normalized matches
+            for word in norm_matches:
+                if word not in exact_matches:  # Avoid double counting
+                    score += important_words.get(word, 3) * 0.7
+            
+            # === COVERAGE SCORING ===
+            if len(user_words) > 0:
+                coverage = len(exact_matches) / len(user_words)
+                score += coverage * 25
+                
+                # Bonus for high coverage
+                if coverage > 0.7:
+                    score += 15
+            
+            if len(user_norm_words) > 0:
+                norm_coverage = len(norm_matches) / len(user_norm_words)
+                score += norm_coverage * 20
+            
+            # === KEYWORD COLUMN MATCHING ===
+            if row['keywords']:
+                keyword_words = set(str(row['keywords']).lower().split())
+                keyword_matches = user_words.intersection(keyword_words)
+                
+                # Context-aware keyword scoring
+                for word in keyword_matches:
+                    base_score = important_words.get(word, 8) * 2
+                    if word in context_weights:
+                        context_found = any(cw in user_words for cw in context_weights[word].keys())
+                        if context_found:
+                            base_score *= 1.4
+                    score += base_score
+            
+            # === PARTIAL MATCHING ===
+            partial_score = 0
+            for user_word in user_words:
+                if len(user_word) > 3:
+                    for q_word in question_words:
+                        if len(q_word) > 3:
+                            if user_word in q_word or q_word in user_word:
+                                partial_score += 8
+                                break
+            score += partial_score
+            
+            # === QUESTION TYPE MATCHING ===
+            # Identify question patterns
+            question_patterns = {
+                'what': ['gì', 'nào', 'những', 'các'],
+                'how_many': ['bao', 'nhiêu', 'mấy'],
+                'when': ['khi', 'lúc', 'thời'],
+                'where': ['ở', 'đâu', 'chỗ'],
+                'how': ['như', 'thế', 'nào', 'cách', 'làm']
+            }
+            
+            user_pattern = None
+            row_pattern = None
+            
+            for pattern, words in question_patterns.items():
+                if any(word in user_words for word in words):
+                    user_pattern = pattern
+                if any(word in question_words for word in words):
+                    row_pattern = pattern
+            
+            if user_pattern and user_pattern == row_pattern:
+                score += 15
+            
+            # === LENGTH AND STRUCTURE SIMILARITY ===
+            len_ratio = min(len(user_input), len(row['question'])) / max(len(user_input), len(row['question']))
+            score += len_ratio * 8
+            
+            # Word count similarity
+            word_count_ratio = min(len(user_words), len(question_words)) / max(len(user_words), len(question_words))
+            score += word_count_ratio * 5
+            
+            if score > 20:  # Threshold
+                scored_matches.append((score, row['answer'], idx))
+        
+        # Normalize scores và return best match
+        if scored_matches:
+            scored_matches.sort(key=lambda x: x[0], reverse=True)
+            
+            # Dynamic threshold based on score distribution
+            top_score = scored_matches[0][0]
+            if len(scored_matches) > 1:
+                second_score = scored_matches[1][0]
+                threshold_ratio = 0.4 if top_score > second_score * 1.5 else 0.6
+            else:
+                threshold_ratio = 0.5
+            
+            max_score = max(scored_matches, key=lambda x: x[0])[0]
+            if max_score > 0:
+                normalized_score = scored_matches[0][0] / max_score
+                if normalized_score > threshold_ratio:
+                    return scored_matches[0][1]
+        
+        return None
+    
+    def hybrid_top_k_search(self, user_input: str) -> Optional[str]:
+        """Hybrid Top-K search với fuzzy + keyword reranking"""
+        candidates = self.top_k_semantic_search(user_input, k=12)
+        
+        if not candidates:
+            return None
+        
+        # Prepare user features
+        user_processed = self.preprocess_text(user_input)
+        user_normalized = self.normalize_question(user_input)
+        user_words = set(user_processed.split())  # set for intersection operations
+        user_words_list = user_processed.split()  # list for slicing
+        user_norm_words = set(user_normalized.split())
+        
+        # Important words with higher weights
+        important_words = {
+            'ngành': 20, 'học': 15, 'phí': 20, 'điểm': 18, 'thi': 18, 'phòng': 15,
+            'sinh': 12, 'viên': 12, 'fpt': 18, 'môn': 15, 'bao': 12, 'nhiêu': 12,
+            'khi': 10, 'ở': 10, 'đâu': 10, 'nào': 8, 'gì': 8, 'như': 8,
+            'đại': 12, 'trường': 10, 'thời': 10, 'gian': 10, 'cách': 8
+        }
+        
+        # Re-rank candidates với advanced scoring
+        reranked_candidates = []
+        
+        for idx, semantic_score in candidates:
+            row = self.data.iloc[idx]
+            
+            # Initialize component scores
+            fuzzy_score = 0
+            keyword_score = 0
+            context_score = 0
+            
+            # === FUZZY MATCHING COMPONENT ===
+            question_words = set(row['processed_question'].split())
+            norm_question_words = set(row['normalized_question'].split())
+            
+            if user_words and question_words:
+                # Multiple similarity metrics
+                intersection = len(user_words & question_words)
+                union = len(user_words | question_words)
+                jaccard = intersection / union if union > 0 else 0
+                
+                # Containment in both directions
+                containment1 = intersection / len(user_words) if len(user_words) > 0 else 0
+                containment2 = intersection / len(question_words) if len(question_words) > 0 else 0
+                
+                # Normalized word overlap
+                norm_intersection = len(user_norm_words & norm_question_words)
+                norm_union = len(user_norm_words | norm_question_words)
+                norm_jaccard = norm_intersection / norm_union if norm_union > 0 else 0
+                
+                # Dice coefficient
+                dice = 2 * intersection / (len(user_words) + len(question_words)) if (len(user_words) + len(question_words)) > 0 else 0
+                
+                # Combined fuzzy score
+                fuzzy_score = (
+                    jaccard * 0.35 + 
+                    containment1 * 0.25 + 
+                    containment2 * 0.15 + 
+                    norm_jaccard * 0.2 + 
+                    dice * 0.05
+                )
+            
+            # === KEYWORD MATCHING COMPONENT ===
+            # Important word matches
+            important_matches = 0
+            for word in user_words:
+                if word in important_words:
+                    if word in question_words:
+                        important_matches += important_words[word]
+            
+            # Regular word matches
+            regular_matches = len(user_words & question_words) * 5
+            
+            # Keyword column matches
+            keyword_matches = 0
+            if row['keywords']:
+                keyword_words = set(str(row['keywords']).lower().split())
+                keyword_overlap = len(user_words.intersection(keyword_words))
+                keyword_matches = keyword_overlap * 25
+            
+            # Phrase matches
+            phrase_matches = 0
+            user_text = user_processed
+            question_text = row['processed_question']
+            
+            # N-gram matches - use user_words_list for slicing
+            for n in range(2, min(5, len(user_words_list) + 1)):
+                user_ngrams = [' '.join(user_words_list[i:i+n]) for i in range(len(user_words_list) - n + 1)]
+                for ngram in user_ngrams:
+                    if ngram in question_text:
+                        phrase_matches += n * 8
+            
+            # Substring matches
+            if len(user_normalized) > 4 and user_normalized in row['normalized_question']:
+                phrase_matches += 30
+            
+            keyword_score = (important_matches + regular_matches + keyword_matches + phrase_matches) / 100
+            
+            # === CONTEXT SCORING ===
+            # Length similarity
+            len_ratio = min(len(user_input), len(row['question'])) / max(len(user_input), len(row['question']))
+            context_score += len_ratio * 0.3
+            
+            # Question type similarity
+            user_question_words = {'gì', 'nào', 'bao', 'nhiêu', 'khi', 'ở', 'đâu', 'như', 'thế', 'sao'}
+            user_has_question = any(word in user_words for word in user_question_words)
+            row_has_question = any(word in question_words for word in user_question_words)
+            
+            if user_has_question and row_has_question:
+                context_score += 0.2
+            
+            # === FINAL SCORING ===
+            # Normalize semantic score (0-1)
+            normalized_semantic = min(semantic_score, 1.0)
+            
+            # Weighted combination
+            final_score = (
+                normalized_semantic * 0.4 +  # Semantic base
+                fuzzy_score * 0.35 +         # Fuzzy similarity
+                keyword_score * 0.2 +        # Keyword matching
+                context_score * 0.05         # Context bonus
+            )
+            
+            # Boost for multiple high scores
+            if fuzzy_score > 0.4 and keyword_score > 0.3:
+                final_score *= 1.15
+            
+            if normalized_semantic > 0.3 and fuzzy_score > 0.3:
+                final_score *= 1.1
+            
+            reranked_candidates.append((final_score, row['answer'], idx))
+        
+        # Return best candidate
+        if reranked_candidates:
+            reranked_candidates.sort(key=lambda x: x[0], reverse=True)
+            best_candidate = reranked_candidates[0]
+            
+            # Dynamic threshold based on top candidates
+            if len(reranked_candidates) > 1:
+                top_score = best_candidate[0]
+                second_score = reranked_candidates[1][0]
+                
+                # If top score is significantly better, lower threshold
+                if top_score > second_score * 1.3:
+                    threshold = 0.15
+                else:
+                    threshold = 0.25
+            else:
+                threshold = 0.2
+            
+            if best_candidate[0] > threshold:
+                return best_candidate[1]
+        
+        return None
+    
+    def ensemble_semantic_search(self, user_input: str) -> Optional[str]:
+        """Ensemble semantic search với top-k - keep for backward compatibility"""
+        return self.hybrid_top_k_search(user_input)
+    
+    def phrase_match(self, user_input: str) -> Optional[str]:
+        """Enhanced phrase matching với context-aware scoring"""
+        user_processed = self.preprocess_text(user_input)
+        user_normalized = self.normalize_question(user_input)
+        user_words = user_processed.split()
+        
+        # Important phrases với weights
+        important_phrases = {
+            'ngành học': 25, 'học phí': 25, 'phòng thi': 20, 'sinh viên': 15,
+            'điểm thi': 20, 'bao nhiêu': 15, 'thời gian': 15, 'cách thức': 12,
+            'như thế nào': 12, 'ở đâu': 12, 'khi nào': 12, 'đại học': 15,
+            'trường fpt': 15, 'fpt university': 15, 'những gì': 10, 'làm sao': 10
         }
         
         best_match = None
         best_score = 0
         
-        for _, row in self.data.iterrows():
-            question_words = set(row['processed_question'].split())
-            
-            # Tính điểm
-            score = 0
-            
-            # Exact word matches
-            exact_matches = user_words.intersection(question_words)
-            for word in exact_matches:
-                if word in important_words:
-                    score += important_words[word]
-                else:
-                    score += 3
-            
-            # Bonus cho coverage
-            if len(user_words) > 0:
-                coverage = len(exact_matches) / len(user_words)
-                score += coverage * 15
-            
-            # Bonus cho keyword column
-            if row['keywords']:
-                keyword_words = set(row['keywords'].lower().split())
-                keyword_matches = user_words.intersection(keyword_words)
-                score += len(keyword_matches) * 12
-            
-            # Partial matches
-            for user_word in user_words:
-                if len(user_word) > 3:
-                    for q_word in question_words:
-                        if len(q_word) > 3 and (user_word in q_word or q_word in user_word):
-                            score += 4
-                            break
-            
-            if score > best_score and score > 10:  # Threshold
-                best_score = score
-                best_match = row['answer']
-        
-        return best_match
-    
-    def semantic_search(self, user_input: str) -> Optional[str]:
-        """Semantic search tối ưu"""
-        user_processed = self.preprocess_text(user_input)
-        
-        try:
-            # Tạo vector cho input
-            input_vector = self.tfidf_vectorizer.transform([user_processed])
-            
-            # Tính similarity
-            similarities = cosine_similarity(input_vector, self.tfidf_matrix).flatten()
-            
-            # Tìm best match
-            best_idx = np.argmax(similarities)
-            best_similarity = similarities[best_idx]
-            
-            if best_similarity > 0.15:  # Threshold thấp để dễ match
-                return self.data.iloc[best_idx]['answer']
-            
-            return None
-        except:
-            return None
-    
-    def phrase_match(self, user_input: str) -> Optional[str]:
-        """Phrase matching - tìm cụm từ chung"""
-        user_processed = self.preprocess_text(user_input)
-        user_words = user_processed.split()
-        
-        best_match = None
-        best_score = 0
-        
-        for _, row in self.data.iterrows():
+        for idx, row in self.data.iterrows():
             question_processed = row['processed_question']
+            question_normalized = row['normalized_question']
+            question_words = question_processed.split()
             score = 0
             
-            # Tìm bigrams và trigrams chung
-            for i in range(len(user_words) - 1):
-                bigram = ' '.join(user_words[i:i+2])
-                if bigram in question_processed:
-                    score += 15
+            # === IMPORTANT PHRASE MATCHING ===
+            for phrase, weight in important_phrases.items():
+                if phrase in user_processed and phrase in question_processed:
+                    score += weight
+                elif phrase in user_normalized and phrase in question_normalized:
+                    score += weight * 0.8
             
-            for i in range(len(user_words) - 2):
-                trigram = ' '.join(user_words[i:i+3])
-                if trigram in question_processed:
+            # === MULTI-LEVEL N-GRAM MATCHING ===
+            for n in range(2, min(7, len(user_words) + 1)):
+                for i in range(len(user_words) - n + 1):
+                    ngram = ' '.join(user_words[i:i+n])
+                    
+                    # Skip if ngram is too short or common
+                    if len(ngram) < 4:
+                        continue
+                    
+                    # Score based on n-gram length và rarity
+                    if ngram in question_processed:
+                        # Bonus for longer and rarer n-grams
+                        rarity_bonus = 1.0
+                        if n >= 4:
+                            rarity_bonus = 1.5
+                        if n >= 5:
+                            rarity_bonus = 2.0
+                        
+                        score += n * 12 * rarity_bonus
+                    
+                    if ngram in question_normalized:
+                        score += n * 10
+            
+            # === SUBSTRING MATCHING ===
+            # Long substring matches
+            if len(user_normalized) > 5:
+                if user_normalized in question_normalized:
+                    score += 35
+                elif user_normalized in question_processed:
+                    score += 30
+            
+            # Reverse substring matching
+            if len(question_normalized) > 5:
+                if question_normalized in user_normalized:
                     score += 25
             
-            # Substring matching
-            if len(user_processed) > 5 and user_processed in question_processed:
-                score += 20
+            # === PATTERN MATCHING ===
+            # Question word patterns
+            question_patterns = [
+                (['gì', 'nào'], ['gì', 'nào', 'những', 'các']),
+                (['bao', 'nhiêu'], ['bao', 'nhiêu', 'mấy']),
+                (['khi', 'nào'], ['khi', 'nào', 'lúc', 'thời']),
+                (['ở', 'đâu'], ['ở', 'đâu', 'chỗ', 'nơi']),
+                (['như', 'thế', 'nào'], ['như', 'thế', 'nào', 'cách', 'làm'])
+            ]
             
-            if score > best_score and score > 10:
+            user_set = set(user_words)
+            question_set = set(question_words)
+            
+            for user_pattern, question_pattern in question_patterns:
+                if any(word in user_set for word in user_pattern):
+                    if any(word in question_set for word in question_pattern):
+                        score += 18
+            
+            # === SEMANTIC PHRASE MATCHING ===
+            # Key concept matching
+            key_concepts = {
+                'education': ['học', 'ngành', 'môn', 'giáo', 'dục'],
+                'cost': ['phí', 'tiền', 'chi', 'phí', 'giá'],
+                'exam': ['thi', 'kiểm', 'tra', 'điểm'],
+                'student': ['sinh', 'viên', 'học', 'sinh'],
+                'time': ['thời', 'gian', 'giờ', 'phút'],
+                'place': ['phòng', 'nơi', 'chỗ', 'địa']
+            }
+            
+            user_concepts = set()
+            question_concepts = set()
+            
+            for concept, words in key_concepts.items():
+                if any(word in user_set for word in words):
+                    user_concepts.add(concept)
+                if any(word in question_set for word in words):
+                    question_concepts.add(concept)
+            
+            concept_overlap = len(user_concepts.intersection(question_concepts))
+            score += concept_overlap * 8
+            
+            # === STRUCTURE SIMILARITY ===
+            # Similar question structure
+            if len(user_words) > 0 and len(question_words) > 0:
+                # Length similarity
+                len_ratio = min(len(user_words), len(question_words)) / max(len(user_words), len(question_words))
+                score += len_ratio * 10
+                
+                # Position-based matching (important words in similar positions)
+                position_score = 0
+                for i, word in enumerate(user_words):
+                    if word in important_phrases or len(word) > 3:
+                        # Check if word appears in similar position in question
+                        relative_pos = i / len(user_words)
+                        for j, q_word in enumerate(question_words):
+                            if word == q_word:
+                                q_relative_pos = j / len(question_words)
+                                if abs(relative_pos - q_relative_pos) < 0.3:
+                                    position_score += 5
+                                break
+                
+                score += position_score
+            
+            # === FINAL SCORING ===
+            if score > best_score and score > 15:
                 best_score = score
                 best_match = row['answer']
         
         return best_match
     
     def fuzzy_match(self, user_input: str) -> Optional[str]:
-        """Fuzzy matching đơn giản"""
+        """Enhanced fuzzy matching với multiple similarity metrics"""
         user_processed = self.preprocess_text(user_input)
+        user_normalized = self.normalize_question(user_input)
         user_words = set(user_processed.split())
+        user_norm_words = set(user_normalized.split())
         
         best_match = None
         best_similarity = 0
         
         for _, row in self.data.iterrows():
             question_words = set(row['processed_question'].split())
+            norm_question_words = set(row['normalized_question'].split())
             
             if user_words and question_words:
-                # Jaccard similarity
+                # Multiple similarity metrics
+                
+                # 1. Jaccard similarity
                 intersection = len(user_words & question_words)
                 union = len(user_words | question_words)
                 jaccard = intersection / union if union > 0 else 0
                 
-                # Containment similarity
-                containment = intersection / len(user_words) if len(user_words) > 0 else 0
+                # 2. Containment similarity (both directions)
+                containment1 = intersection / len(user_words) if len(user_words) > 0 else 0
+                containment2 = intersection / len(question_words) if len(question_words) > 0 else 0
                 
-                # Combined score
-                similarity = (jaccard * 0.6) + (containment * 0.4)
+                # 3. Normalized Jaccard
+                norm_intersection = len(user_norm_words & norm_question_words)
+                norm_union = len(user_norm_words | norm_question_words)
+                norm_jaccard = norm_intersection / norm_union if norm_union > 0 else 0
                 
-                if similarity > best_similarity and similarity > 0.2:
+                # 4. Dice coefficient
+                dice = 2 * intersection / (len(user_words) + len(question_words)) if (len(user_words) + len(question_words)) > 0 else 0
+                
+                # Combined similarity
+                similarity = (
+                    jaccard * 0.3 + 
+                    containment1 * 0.25 + 
+                    containment2 * 0.15 + 
+                    norm_jaccard * 0.2 + 
+                    dice * 0.1
+                )
+                
+                # Bonus for exact matches of important words
+                important_exact = 0
+                important_words = ['ngành', 'học', 'phí', 'điểm', 'thi', 'phòng', 'fpt', 'môn']
+                for word in important_words:
+                    if word in user_words and word in question_words:
+                        important_exact += 0.05
+                
+                similarity += important_exact
+                
+                if similarity > best_similarity and similarity > 0.15:
                     best_similarity = similarity
                     best_match = row['answer']
         
         return best_match
     
     def get_response(self, user_input: str) -> str:
-        """Lấy response với thứ tự tối ưu"""
+        """Enhanced response với hybrid top-k approach"""
         if not user_input.strip():
             return "Xin chào! Tôi có thể giúp gì cho bạn?"
         
-        # Thứ tự ưu tiên: hiệu quả cao nhất trước
+        # Primary method: Hybrid Top-K search
+        try:
+            result = self.hybrid_top_k_search(user_input)
+            if result:
+                return result
+        except Exception as e:
+            print(f"Error in hybrid_top_k_search: {e}")
         
-        # 1. Exact match
-        result = self.exact_match(user_input)
-        if result:
-            return result
+        # Fallback methods với weighted voting
+        fallback_methods = [
+            ('exact_match', 1.0),
+            ('advanced_keyword_match', 0.9),
+            ('phrase_match', 0.8),
+            ('fuzzy_match', 0.7)
+        ]
         
-        # 2. Keyword match (hiệu quả nhất)
-        result = self.keyword_match(user_input)
-        if result:
-            return result
+        results = {}
         
-        # 3. Phrase match
-        result = self.phrase_match(user_input)
-        if result:
-            return result
+        for method_name, weight in fallback_methods:
+            try:
+                method = getattr(self, method_name)
+                result = method(user_input)
+                if result:
+                    if result not in results:
+                        results[result] = 0
+                    results[result] += weight
+            except Exception as e:
+                print(f"Error in {method_name}: {e}")
+                continue
         
-        # 4. Semantic search
-        result = self.semantic_search(user_input)
-        if result:
-            return result
+        # Return result với highest weighted vote
+        if results:
+            best_result = max(results.items(), key=lambda x: x[1])
+            if best_result[1] >= 0.7:  # Minimum confidence threshold
+                return best_result[0]
         
-        # 5. Fuzzy match (cuối cùng)
-        result = self.fuzzy_match(user_input)
-        if result:
-            return result
+        # Final fallback: Chạy từng method riêng lẻ với threshold thấp
+        for method_name, _ in fallback_methods:
+            try:
+                method = getattr(self, method_name)
+                result = method(user_input)
+                if result:
+                    return result
+            except:
+                continue
         
         return "Xin lỗi, tôi không tìm thấy thông tin phù hợp với câu hỏi của bạn. Bạn có thể hỏi câu hỏi khác không?"
 
@@ -261,7 +834,7 @@ def chat_api():
     global chatbot
     try:
         if chatbot is None:
-            chatbot = OptimizedChatbot()
+            chatbot = AdvancedChatbot()
         
         data = request.get_json()
         user_input = data.get('chatInput', '')
@@ -272,7 +845,7 @@ def chat_api():
 
 def main():
     """Test function"""
-    chatbot = OptimizedChatbot()
+    chatbot = AdvancedChatbot()
     
     test_questions = [
         "Những ngành học tại FPTU",
@@ -284,13 +857,14 @@ def main():
     
     for q in test_questions:
         print(f"Q: {q}")
-        print(f"A: {chatbot.get_response(q)[:100]}...")
+        response = chatbot.get_response(q)
+        print(f"A: {response[:100]}...")
         print("-" * 50)
 
 if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == 'api':
-        print("Starting Optimized Chatbot API...")
+        print("Starting Advanced Chatbot API...")
         app.run(host='0.0.0.0', port=8000, debug=True)
     else:
         main()

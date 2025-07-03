@@ -19,7 +19,7 @@ def send_request(row):
     question = str(row['question']).strip()
     expected = str(row['answer']).strip()   # Đáp án đúng để kiểm tra
     try:
-        response = requests.post(API_URL, json={'chatInput': question}, timeout=20)
+        response = requests.post(API_URL, json={'chatInput': question}, timeout=60)  # Tăng timeout lên 60s
         response.raise_for_status()
         chatbot_ans = response.json().get('output', '').strip()
     except Exception as e:

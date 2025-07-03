@@ -19,9 +19,13 @@ def send_request(row):
     question = str(row['question']).strip()
     expected = str(row['answer']).strip()   # Đáp án đúng để kiểm tra
     try:
-        response = requests.post(API_URL, json={'chatInput': question}, timeout=60)  # Tăng timeout lên 60s
+        response = requests.post(API_URL, json={'chatInput': question}, timeout=90)  # Tăng timeout lên 90s
         response.raise_for_status()
         chatbot_ans = response.json().get('output', '').strip()
+    except requests.exceptions.Timeout:
+        chatbot_ans = "Lỗi: Timeout - Server phản hồi chậm"
+    except requests.exceptions.ConnectionError:
+        chatbot_ans = "Lỗi: Không thể kết nối đến server"
     except Exception as e:
         chatbot_ans = f"Lỗi: {e}"
     is_correct = chatbot_ans.lower() == expected.lower()
@@ -35,7 +39,7 @@ def send_request(row):
 
 start_time = time.time()
 
-with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:  # Giảm workers để giảm tải
     futures = [executor.submit(send_request, row) for idx, row in test_df.iterrows()]
     for future in concurrent.futures.as_completed(futures):
         result = future.result()

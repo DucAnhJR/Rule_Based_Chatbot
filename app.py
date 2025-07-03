@@ -190,33 +190,63 @@ class RuleBasedChatbot:
         return ' '.join(clean_tokens)
     
     def wildcard_match(self, user_input: str) -> Optional[str]:
-        """Tìm kiếm wildcard pattern - linh hoạt hơn"""
+        """Tìm kiếm wildcard pattern - cải thiện với weighted scoring"""
         input_words = self.extract_important_words(user_input)
         
         best_match = None
-        max_matches = 0
+        best_score = 0
         
         for idx, row in self.data.iterrows():
             question_words = self.extract_important_words(row['question'])
+            question_text = self.preprocess_text(row['question'])
             
-            # Đếm số từ khớp
-            matches = 0
+            score = 0
+            matched_words = 0
+            
             for input_word in input_words:
+                word_matched = False
+                
+                # Exact match trong từ
+                if input_word in question_words:
+                    score += 10
+                    word_matched = True
+                
+                # Partial match trong từ
                 for question_word in question_words:
-                    if len(input_word) > 1 and (input_word in question_word or question_word in input_word):
-                        matches += 1
-                        break
+                    if len(input_word) > 1:
+                        if input_word in question_word:
+                            score += 5
+                            word_matched = True
+                        elif len(question_word) > 1 and question_word in input_word:
+                            score += 3
+                            word_matched = True
+                
+                # Match trong toàn bộ câu hỏi
+                if len(input_word) > 2 and input_word in question_text:
+                    score += 2
+                    word_matched = True
+                
+                if word_matched:
+                    matched_words += 1
             
-            # Cập nhật best match
-            if matches > max_matches and matches > 0:
-                max_matches = matches
+            # Bonus cho tỷ lệ từ được match
+            if len(input_words) > 0:
+                match_ratio = matched_words / len(input_words)
+                score += match_ratio * 10
+            
+            # Bonus cho độ dài từ khóa
+            for word in input_words:
+                if len(word) > 3:
+                    score += 1
+            
+            if score > best_score:
+                best_score = score
                 best_match = row['answer']
         
-        # Trả về nếu có ít nhất 1 từ khớp
-        return best_match if max_matches > 0 else None
+        return best_match if best_score > 3 else None
     
     def fuzzy_match(self, user_input: str) -> Optional[str]:
-        """Tìm kiếm fuzzy matching - ngưỡng thấp hơn"""
+        """Tìm kiếm fuzzy matching - cải thiện với weighted scoring"""
         input_words = set(self.extract_important_words(user_input))
         
         best_match = None
@@ -233,18 +263,23 @@ class RuleBasedChatbot:
                 # Jaccard similarity
                 jaccard = intersection / union if union > 0 else 0
                 
-                # Containment similarity
-                containment = intersection / len(input_words) if len(input_words) > 0 else 0
+                # Containment similarity (cả 2 chiều)
+                containment1 = intersection / len(input_words) if len(input_words) > 0 else 0
+                containment2 = intersection / len(question_words) if len(question_words) > 0 else 0
                 
-                # Lấy max của 2 similarity
-                similarity = max(jaccard, containment)
+                # Weighted combination
+                similarity = (jaccard * 0.4) + (containment1 * 0.4) + (containment2 * 0.2)
+                
+                # Bonus cho số từ khớp nhiều
+                if intersection > 1:
+                    similarity += intersection * 0.1
                 
                 if similarity > best_similarity:
                     best_similarity = similarity
                     best_match = row['answer']
         
         # Ngưỡng thấp hơn để dễ match hơn
-        return best_match if best_similarity > 0.1 else None
+        return best_match if best_similarity > 0.05 else None
     
     def match_phrase(self, user_input: str) -> Optional[str]:
         """Tìm kiếm match phrase - linh hoạt hơn"""
@@ -319,25 +354,231 @@ class RuleBasedChatbot:
         # Ngưỡng rất thấp để dễ match
         return best_match if best_similarity > 0.01 else None
     
-    def keyword_overlap_match(self, user_input: str) -> Optional[str]:
-        """Tìm kiếm dựa trên số lượng từ khóa chung"""
-        input_words = set(self.extract_important_words(user_input))
+    def advanced_similarity_match(self, user_input: str) -> Optional[str]:
+        """Tìm kiếm dựa trên similarity nâng cao - tối ưu tốc độ"""
+        input_words = self.extract_important_words(user_input)
+        processed_input = self.preprocess_text(user_input)
+        
+        # Giới hạn số từ để tăng tốc độ
+        if len(input_words) > 10:
+            input_words = input_words[:10]
         
         best_match = None
-        max_overlap = 0
+        best_score = 0
         
         for idx, row in self.data.iterrows():
-            question_words = set(self.extract_important_words(row['question']))
+            question_words = self.extract_important_words(row['question'])
+            processed_question = self.preprocess_text(row['question'])
             
-            # Đếm số từ chung
-            overlap = len(input_words & question_words)
+            total_score = 0
             
-            if overlap > max_overlap:
-                max_overlap = overlap
+            # 1. Exact word matching (nhanh)
+            input_set = set(input_words)
+            question_set = set(question_words)
+            if input_set and question_set:
+                exact_matches = len(input_set & question_set)
+                total_score += exact_matches * 10
+                
+                # Early exit nếu có nhiều exact matches
+                if exact_matches >= len(input_words) * 0.7:
+                    return row['answer']
+            
+            # 2. Partial word matching (giới hạn)
+            partial_count = 0
+            for input_word in input_words[:5]:  # Chỉ kiểm tra 5 từ đầu
+                for question_word in question_words[:10]:  # Chỉ kiểm tra 10 từ đầu
+                    if len(input_word) > 2 and len(question_word) > 2:
+                        if input_word in question_word or question_word in input_word:
+                            total_score += 5
+                            partial_count += 1
+                            break
+                if partial_count >= 3:  # Đủ rồi, không cần kiểm tra thêm
+                    break
+            
+            # 3. Sequence matching (đơn giản hóa)
+            if len(processed_input) > 5 and processed_input in processed_question:
+                total_score += 15
+            
+            if total_score > best_score:
+                best_score = total_score
                 best_match = row['answer']
         
-        # Trả về nếu có ít nhất 1 từ chung
-        return best_match if max_overlap > 0 else None
+        return best_match if best_score > 8 else None
+    
+    def levenshtein_match(self, user_input: str) -> Optional[str]:
+        """Tìm kiếm dựa trên khoảng cách Levenshtein đơn giản - tối ưu tốc độ"""
+        processed_input = self.preprocess_text(user_input)
+        
+        # Giới hạn độ dài để tăng tốc độ
+        if len(processed_input) > 50:
+            processed_input = processed_input[:50]
+        
+        def simple_distance(s1, s2):
+            # Tối ưu: kiểm tra độ dài trước
+            len_diff = abs(len(s1) - len(s2))
+            if len_diff > min(len(s1), len(s2)) * 0.7:  # Quá khác biệt
+                return float('inf')
+            
+            if len(s1) == 0:
+                return len(s2)
+            if len(s2) == 0:
+                return len(s1)
+            
+            # Ma trận DP đơn giản với giới hạn
+            if len(s1) > 30 or len(s2) > 30:  # Quá dài, bỏ qua
+                return float('inf')
+            
+            prev_row = list(range(len(s2) + 1))
+            for i, c1 in enumerate(s1):
+                curr_row = [i + 1]
+                for j, c2 in enumerate(s2):
+                    insertions = prev_row[j + 1] + 1
+                    deletions = curr_row[j] + 1
+                    substitutions = prev_row[j] + (c1 != c2)
+                    curr_row.append(min(insertions, deletions, substitutions))
+                prev_row = curr_row
+            
+            return prev_row[-1]
+        
+        best_match = None
+        min_distance = float('inf')
+        
+        for idx, row in self.data.iterrows():
+            processed_question = self.preprocess_text(row['question'])
+            
+            # Tối ưu: kiểm tra nhanh trước
+            if abs(len(processed_input) - len(processed_question)) > 20:
+                continue
+            
+            if processed_input and processed_question:
+                distance = simple_distance(processed_input[:30], processed_question[:30])  # Giới hạn độ dài
+                max_len = max(len(processed_input), len(processed_question))
+                
+                if max_len > 0 and distance != float('inf'):
+                    similarity = 1 - (distance / max_len)
+                    if similarity > 0.5 and distance < min_distance:  # Tăng ngưỡng
+                        min_distance = distance
+                        best_match = row['answer']
+        
+        return best_match
+    
+    def flexible_keyword_match(self, user_input: str) -> Optional[str]:
+        """Tìm kiếm từ khóa linh hoạt với scoring"""
+        input_words = [word.lower() for word in self.extract_important_words(user_input) if len(word) > 1]
+        
+        if not input_words:
+            return None
+        
+        scored_matches = []
+        
+        for idx, row in self.data.iterrows():
+            question_words = [word.lower() for word in self.extract_important_words(row['question']) if len(word) > 1]
+            question_text = self.preprocess_text(row['question'])
+            
+            score = 0
+            
+            # Điểm cho exact match
+            for input_word in input_words:
+                if input_word in question_words:
+                    score += 10
+                
+                # Điểm cho partial match
+                for question_word in question_words:
+                    if len(input_word) > 2 and input_word in question_word:
+                        score += 5
+                    elif len(question_word) > 2 and question_word in input_word:
+                        score += 5
+                
+                # Điểm cho substring trong câu hỏi
+                if input_word in question_text:
+                    score += 3
+            
+            # Bonus cho nhiều từ match
+            matched_words = set(input_words) & set(question_words)
+            if len(matched_words) > 1:
+                score += len(matched_words) * 5
+            
+            if score > 0:
+                scored_matches.append((score, row['answer']))
+        
+        if scored_matches:
+            scored_matches.sort(reverse=True)
+            return scored_matches[0][1]
+        
+        return None
+    
+    def ngram_match(self, user_input: str) -> Optional[str]:
+        """Tìm kiếm dựa trên n-gram"""
+        def get_ngrams(text, n):
+            words = text.split()
+            return [' '.join(words[i:i+n]) for i in range(len(words) - n + 1)]
+        
+        processed_input = self.preprocess_text(user_input)
+        input_bigrams = set(get_ngrams(processed_input, 2))
+        input_trigrams = set(get_ngrams(processed_input, 3))
+        
+        best_match = None
+        best_score = 0
+        
+        for idx, row in self.data.iterrows():
+            processed_question = self.preprocess_text(row['question'])
+            question_bigrams = set(get_ngrams(processed_question, 2))
+            question_trigrams = set(get_ngrams(processed_question, 3))
+            
+            score = 0
+            
+            # Trigram matches (cao điểm nhất)
+            trigram_matches = len(input_trigrams & question_trigrams)
+            score += trigram_matches * 15
+            
+            # Bigram matches
+            bigram_matches = len(input_bigrams & question_bigrams)
+            score += bigram_matches * 8
+            
+            if score > best_score:
+                best_score = score
+                best_match = row['answer']
+        
+        return best_match if best_score > 10 else None
+    
+    def contextual_match(self, user_input: str) -> Optional[str]:
+        """Tìm kiếm theo ngữ cảnh"""
+        # Các từ chỉ thị quan trọng
+        question_indicators = ['gì', 'sao', 'nào', 'đâu', 'khi', 'như', 'thế', 'làm', 'có', 'được']
+        
+        processed_input = self.preprocess_text(user_input)
+        input_words = processed_input.split()
+        
+        best_match = None
+        best_relevance = 0
+        
+        for idx, row in self.data.iterrows():
+            processed_question = self.preprocess_text(row['question'])
+            question_words = processed_question.split()
+            
+            relevance = 0
+            
+            # Kiểm tra từ chỉ thị
+            for indicator in question_indicators:
+                if indicator in input_words and indicator in question_words:
+                    relevance += 5
+            
+            # Kiểm tra từ khóa trong ngữ cảnh
+            for i, word in enumerate(input_words):
+                if word in question_words:
+                    # Bonus cho vị trí tương tự
+                    try:
+                        question_index = question_words.index(word)
+                        position_similarity = 1 - abs(i - question_index) / max(len(input_words), len(question_words))
+                        relevance += position_similarity * 3
+                    except:
+                        relevance += 2
+            
+            if relevance > best_relevance:
+                best_relevance = relevance
+                best_match = row['answer']
+        
+        return best_match if best_relevance > 3 else None
     
     def partial_string_match(self, user_input: str) -> Optional[str]:
         """Tìm kiếm chuỗi con"""
@@ -394,44 +635,61 @@ class RuleBasedChatbot:
         return None
     
     def get_response(self, user_input: str) -> str:
-        """Lấy phản hồi cho câu hỏi của user với các phương pháp được cải thiện"""
+        """Lấy phản hồi cho câu hỏi của user với hệ thống tối ưu tốc độ"""
         if not user_input.strip():
             return "Xin chào! Tôi có thể giúp gì cho bạn?"
         
-        # 1. Thử exact match
-        response = self.find_exact_match(user_input)
-        if response:
-            return response
+        # Thứ tự tối ưu: từ nhanh nhất đến chậm nhất
         
-        # 2. Thử partial string match (dễ match nhất)
-        response = self.partial_string_match(user_input)
-        if response:
-            return response
+        # 1. Exact match (nhanh nhất)
+        exact_result = self.find_exact_match(user_input)
+        if exact_result:
+            return exact_result
         
-        # 3. Thử keyword overlap match
-        response = self.keyword_overlap_match(user_input)
-        if response:
-            return response
+        # 2. Partial string match (rất nhanh)
+        partial_result = self.partial_string_match(user_input)
+        if partial_result:
+            return partial_result
         
-        # 4. Thử wildcard matching
-        response = self.wildcard_match(user_input)
-        if response:
-            return response
+        # 3. Flexible keyword match (nhanh, hiệu quả cao)
+        flex_keyword_result = self.flexible_keyword_match(user_input)
+        if flex_keyword_result:
+            return flex_keyword_result
         
-        # 5. Thử fuzzy matching
-        response = self.fuzzy_match(user_input)
-        if response:
-            return response
+        # 4. Wildcard matching (nhanh)
+        wildcard_result = self.wildcard_match(user_input)
+        if wildcard_result:
+            return wildcard_result
         
-        # 6. Thử match phrase
-        response = self.match_phrase(user_input)
-        if response:
-            return response
+        # 5. N-gram match (trung bình)
+        ngram_result = self.ngram_match(user_input)
+        if ngram_result:
+            return ngram_result
         
-        # 7. Thử semantic search
-        response = self.semantic_search(user_input)
-        if response:
-            return response
+        # 6. Fuzzy matching (trung bình)
+        fuzzy_result = self.fuzzy_match(user_input)
+        if fuzzy_result:
+            return fuzzy_result
+        
+        # 7. Contextual match (trung bình)
+        context_result = self.contextual_match(user_input)
+        if context_result:
+            return context_result
+        
+        # 8. Semantic search (nhanh với TF-IDF)
+        semantic_result = self.semantic_search(user_input)
+        if semantic_result:
+            return semantic_result
+        
+        # 9. Advanced similarity (chậm hơn - chỉ khi cần thiết)
+        adv_sim_result = self.advanced_similarity_match(user_input)
+        if adv_sim_result:
+            return adv_sim_result
+        
+        # 10. Levenshtein (chậm nhất - cuối cùng)
+        leven_result = self.levenshtein_match(user_input)
+        if leven_result:
+            return leven_result
         
         return "Xin lỗi, tôi không tìm thấy thông tin phù hợp với câu hỏi của bạn. Bạn có thể hỏi câu hỏi khác không?"
     

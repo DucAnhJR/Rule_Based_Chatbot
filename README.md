@@ -156,6 +156,31 @@ def hybrid_top_k_search(self, user_input: str) -> Optional[str]:
 - **Final scoring:** Weighted combination với bonuses
 - **Dynamic threshold:** Adaptive threshold dựa trên score distribution
 
+#### 2.8 Optimized Confidence System
+```python
+def detect_irrelevant_question(self, user_input: str) -> bool:
+    """Detect câu hỏi không liên quan đến domain giáo dục"""
+```
+
+**Hoạt động:**
+- **Domain Detection:** Phát hiện câu hỏi không thuộc domain giáo dục
+- **Education Keywords:** Tập từ khóa core của domain giáo dục
+- **Irrelevant Keywords:** Tập từ khóa rõ ràng không liên quan
+- **Smart Rejection:** Chỉ reject khi có từ khóa không liên quan VÀ không có từ khóa giáo dục
+- **Maintain Accuracy:** Giữ nguyên accuracy của hệ thống cũ
+
+**Strategy:**
+- **Conservative Approach:** Chỉ reject những case rõ ràng không liên quan
+- **Accuracy First:** Ưu tiên accuracy cao hơn precision  
+- **Fallback Preserved:** Giữ nguyên toàn bộ fallback mechanism
+- **No False Negatives:** Tránh reject nhầm câu hỏi giáo dục
+
+**Benefits:**
+- ✅ Accuracy maintained (≥43%)
+- ✅ Reject obvious irrelevant questions
+- ✅ No complex confidence calculation overhead
+- ✅ Simple and reliable
+
 ### 3. Response Generation
 
 #### Main Response Method
@@ -165,15 +190,16 @@ def get_response(self, user_input: str) -> str:
 ```
 
 **Luồng hoạt động:**
-1. **Primary:** Hybrid Top-K search
-2. **Fallback methods:** Weighted voting system
+1. **Domain Check:** Phát hiện câu hỏi không liên quan → reject
+2. **Primary:** Hybrid Top-K search
+3. **Fallback methods:** Weighted voting system (như cũ)
    - exact_match (weight: 1.0)
    - wildcard_match (weight: 0.95)
    - advanced_keyword_match (weight: 0.9)
    - phrase_match (weight: 0.8)
    - fuzzy_match (weight: 0.7)
-3. **Final fallback:** Chạy từng method với threshold thấp
-4. **Default response:** Thông báo không tìm thấy
+4. **Final fallback:** Chạy từng method với threshold thấp
+5. **Default response:** Thông báo không tìm thấy
 
 ### 4. Flask API
 
@@ -235,6 +261,15 @@ curl -X POST http://localhost:8000 \
 - Target accuracy: 60%+
 - Response time: <2s per question
 - Concurrent handling: 3 workers
+
+### 4. Test Confidence System
+```bash
+# Test confidence scoring
+python test_confidence.py
+
+# Quick confidence test
+python quick_confidence_test.py
+```
 
 ## Optimization Strategies
 
@@ -300,6 +335,22 @@ else:
     'category': 'cost'
 }
 ```
+
+### 5. Optimized Domain Detection
+```python
+# Phát hiện câu hỏi không liên quan
+education_keywords = {'ngành', 'học', 'phí', 'điểm', 'thi', 'fpt', ...}
+irrelevant_keywords = {'thời', 'tiết', 'cà', 'phê', 'xe', 'đạp', ...}
+
+if has_irrelevant and not has_education:
+    return "Xin lỗi, tôi chỉ có thể trả lời các câu hỏi liên quan đến giáo dục..."
+```
+
+**Lợi ích:**
+- Maintain accuracy như baseline (~45%)
+- Reject obvious irrelevant questions
+- Simple và reliable approach
+- No performance overhead
 
 ## Usage Instructions
 

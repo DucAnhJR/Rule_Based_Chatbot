@@ -955,59 +955,358 @@ class AdvancedChatbot:
         
         return best_match
     
-    def get_response(self, user_input: str) -> str:
-        """Enhanced response với hybrid top-k approach"""
-        if not user_input.strip():
-            return "Xin chào! Tôi có thể giúp gì cho bạn?"
+    def calculate_confidence_score(self, user_input: str, answer: str, method_name: str = '') -> float:
+        """Tính confidence score cho câu trả lời dựa trên độ tương đồng với training data"""
+        if not answer or not user_input:
+            return 0.0
+            
+        user_processed = self.preprocess_text(user_input)
+        user_normalized = self.normalize_question(user_input)
+        user_words = set(user_processed.split())
         
-        # Primary method: Hybrid Top-K search
+        # Tìm câu hỏi trong training data có cùng answer
+        matching_questions = self.data[self.data['answer'] == answer]
+        
+        if len(matching_questions) == 0:
+            return 0.0
+        
+        max_confidence = 0.0
+        
+        for _, row in matching_questions.iterrows():
+            question_processed = row['processed_question']
+            question_normalized = row['normalized_question']
+            question_words = set(question_processed.split())
+            
+            # Tính nhiều metric confidence
+            confidences = []
+            
+            # 1. Jaccard similarity
+            if user_words and question_words:
+                intersection = len(user_words & question_words)
+                union = len(user_words | question_words)
+                jaccard = intersection / union if union > 0 else 0
+                confidences.append(jaccard)
+            
+            # 2. Containment similarity
+            if user_words and question_words:
+                containment = len(user_words & question_words) / len(user_words) if len(user_words) > 0 else 0
+                confidences.append(containment)
+            
+            # 3. Exact phrase matching
+            if user_normalized and question_normalized:
+                # Kiểm tra substring matches
+                if user_normalized in question_normalized or question_normalized in user_normalized:
+                    confidences.append(0.8)
+                else:
+                    # N-gram matching
+                    user_ngrams = set()
+                    question_ngrams = set()
+                    
+                    user_words_list = user_processed.split()
+                    question_words_list = question_processed.split()
+                    
+                    # Tạo 2-grams và 3-grams
+                    for n in range(2, 4):
+                        for i in range(len(user_words_list) - n + 1):
+                            user_ngrams.add(' '.join(user_words_list[i:i+n]))
+                        for i in range(len(question_words_list) - n + 1):
+                            question_ngrams.add(' '.join(question_words_list[i:i+n]))
+                    
+                    if user_ngrams and question_ngrams:
+                        ngram_similarity = len(user_ngrams & question_ngrams) / len(user_ngrams | question_ngrams)
+                        confidences.append(ngram_similarity)
+            
+            # 4. Important word matching
+            important_words = {
+                'ngành': 1.0, 'học': 1.0, 'phí': 1.0, 'điểm': 1.0, 'thi': 1.0,
+                'phòng': 1.0, 'sinh': 1.0, 'viên': 1.0, 'fpt': 1.0, 'thời': 1.0,
+                'gian': 1.0, 'bao': 1.0, 'nhiêu': 1.0, 'cách': 1.0, 'quy': 1.0,
+                'định': 1.0, 'thực': 1.0, 'tập': 1.0, 'ojt': 1.0
+            }
+            
+            important_matches = 0
+            total_important = 0
+            
+            for word in user_words:
+                if word in important_words:
+                    total_important += 1
+                    if word in question_words:
+                        important_matches += 1
+            
+            if total_important > 0:
+                important_confidence = important_matches / total_important
+                confidences.append(important_confidence)
+            
+            # 5. TF-IDF similarity
+            try:
+                # Sử dụng TF-IDF matrix 1 (processed + keywords)
+                combined_user = f"{user_processed} {self.extract_keywords_from_text(user_input)}"
+                combined_question = f"{question_processed} {row['keywords']}"
+                
+                user_vector = self.tfidf_vectorizer1.transform([combined_user])
+                question_vector = self.tfidf_vectorizer1.transform([combined_question])
+                
+                tfidf_similarity = cosine_similarity(user_vector, question_vector)[0][0]
+                confidences.append(tfidf_similarity)
+            except:
+                pass
+            
+            # Tính confidence tổng hợp
+            if confidences:
+                # Weighted average với emphasis trên các metric quan trọng
+                weights = [0.25, 0.2, 0.2, 0.2, 0.15]  # Jaccard, Containment, Phrase, Important, TF-IDF
+                
+                weighted_confidence = 0.0
+                total_weight = 0.0
+                
+                for i, conf in enumerate(confidences):
+                    if i < len(weights):
+                        weighted_confidence += conf * weights[i]
+                        total_weight += weights[i]
+                    else:
+                        weighted_confidence += conf * 0.1
+                        total_weight += 0.1
+                
+                if total_weight > 0:
+                    final_confidence = weighted_confidence / total_weight
+                    
+                    # Bonus cho exact matches
+                    if any(conf > 0.9 for conf in confidences):
+                        final_confidence += 0.1
+                    
+                    # Bonus cho method cụ thể
+                    if method_name == 'exact_match':
+                        final_confidence += 0.15
+                    elif method_name == 'advanced_keyword_match':
+                        final_confidence += 0.1
+                    elif method_name == 'wildcard_match':
+                        final_confidence += 0.08
+                    
+                    max_confidence = max(max_confidence, final_confidence)
+        
+        return min(max_confidence, 1.0)  # Cap at 1.0
+    
+    def extract_keywords_from_text(self, text: str) -> str:
+        """Trích xuất keywords từ text để tăng accuracy của confidence scoring"""
+        processed = self.preprocess_text(text)
+        words = processed.split()
+        
+        # Lấy important words
+        important_words = {
+            'ngành', 'học', 'phí', 'điểm', 'thi', 'phòng', 'sinh', 'viên', 
+            'fpt', 'thời', 'gian', 'bao', 'nhiêu', 'cách', 'quy', 'định', 
+            'thực', 'tập', 'ojt', 'đại', 'trường', 'môn', 'lịch', 'giảng', 
+            'viên', 'kỳ', 'học', 'kì', 'cuối', 'giữa', 'midterm', 'final'
+        }
+        
+        keywords = [word for word in words if word in important_words]
+        return ' '.join(keywords)
+
+    def detect_irrelevant_question(self, user_input: str) -> bool:
+        """Detect câu hỏi không liên quan đến domain giáo dục - conservative approach"""
+        user_processed = self.preprocess_text(user_input)
+        user_words = set(user_processed.split())
+        
+        # Từ khóa core của domain giáo dục
+        education_core_keywords = {
+            'ngành', 'học', 'phí', 'điểm', 'thi', 'phòng', 'sinh', 'viên', 
+            'fpt', 'đại', 'trường', 'môn', 'lịch', 'giảng', 'viên', 'kỳ',
+            'kì', 'cuối', 'giữa', 'midterm', 'final', 'thực', 'tập', 'ojt',
+            'quy', 'định', 'luật', 'chính', 'sách', 'yêu', 'cầu', 'điều', 'kiện',
+            'bao', 'nhiêu', 'cách', 'như', 'thế', 'nào', 'ở', 'đâu', 'khi'
+        }
+        
+        # Từ khóa rõ ràng không liên quan (chỉ những từ cực kỳ rõ ràng)
+        clearly_irrelevant = {
+            'thời', 'tiết', 'cà', 'phê', 'nấu', 'ăn', 'phở', 'bún', 'cơm',
+            'xe', 'máy', 'ô', 'tô', 'bóng', 'đá', 'ca', 'nhạc', 'phim',
+            'game', 'chơi', 'siêu', 'thị', 'mua', 'bán', 'quần', 'áo',
+            'du', 'lịch', 'khách', 'sạn', 'máy', 'bay', 'tàu', 'hỏa',
+            'yêu', 'đương', 'hẹn', 'hò', 'cưới', 'xin', 'chào'
+        }
+        
+        # Chỉ reject nếu có từ khóa rõ ràng không liên quan VÀ HOÀN TOÀN không có từ khóa giáo dục
+        has_irrelevant = len(user_words.intersection(clearly_irrelevant)) > 0
+        has_education = len(user_words.intersection(education_core_keywords)) > 0
+        
+        # Chỉ reject những trường hợp cực kỳ rõ ràng
+        if has_irrelevant and not has_education and len(user_words) > 2:
+            return True
+        
+        # Câu hỏi 1 từ hoặc rỗng
+        if len(user_words) <= 1:
+            return True
+        
+        # Câu hỏi chỉ có greeting mà không có nội dung
+        greeting_only = {'xin', 'chào', 'hello', 'hi', 'hey'}
+        if user_words.issubset(greeting_only):
+            return True
+        
+        return False
+
+    def validate_answer_quality(self, user_input: str, answer: str, quality_threshold: float = 0.3) -> bool:
+        """
+        Kiểm tra chất lượng câu trả lời so với câu hỏi
+        Returns True nếu câu trả lời phù hợp (relevance >= threshold)
+        """
         try:
-            result = self.hybrid_top_k_search(user_input)
-            if result:
-                return result
+            # Preprocess both texts
+            user_processed = self.preprocess_text(user_input)
+            answer_processed = self.preprocess_text(answer)
+            
+            # Extract keywords
+            user_words = set(user_processed.split())
+            answer_words = set(answer_processed.split())
+            
+            if not user_words or not answer_words:
+                return False
+            
+            # 1. Keyword overlap score
+            intersection = len(user_words & answer_words)
+            union = len(user_words | answer_words)
+            keyword_overlap = intersection / union if union > 0 else 0
+            
+            # 2. Important word matching
+            important_words = {
+                'ngành', 'học', 'phí', 'điểm', 'thi', 'phòng', 'sinh', 'viên', 
+                'fpt', 'thời', 'gian', 'bao', 'nhiêu', 'cách', 'quy', 'định',
+                'thực', 'tập', 'ojt', 'môn', 'đại', 'trường', 'khi', 'ở', 'đâu'
+            }
+            
+            user_important = user_words & important_words
+            answer_important = answer_words & important_words
+            
+            important_overlap = 0
+            if user_important:
+                important_overlap = len(user_important & answer_important) / len(user_important)
+            
+            # 3. TF-IDF similarity
+            tfidf_similarity = 0
+            try:
+                user_vector = self.tfidf_vectorizer1.transform([user_processed])
+                answer_vector = self.tfidf_vectorizer1.transform([answer_processed])
+                tfidf_similarity = cosine_similarity(user_vector, answer_vector)[0][0]
+            except:
+                pass
+            
+            # 4. Question type matching
+            question_words = {'gì', 'nào', 'bao', 'nhiêu', 'khi', 'ở', 'đâu', 'như', 'thế', 'sao'}
+            user_has_question = any(word in user_words for word in question_words)
+            
+            # Bonus for question type consistency
+            question_bonus = 0.1 if user_has_question else 0
+            
+            # 5. Length appropriateness (not too short, not too long)
+            length_ratio = min(len(answer), 500) / 500  # Normalize to 0-1
+            length_bonus = 0.1 if 20 <= len(answer) <= 800 else 0
+            
+            # Combined relevance score
+            relevance_score = (
+                keyword_overlap * 0.3 +
+                important_overlap * 0.3 +
+                tfidf_similarity * 0.25 +
+                question_bonus * 0.1 +
+                length_bonus * 0.05
+            )
+            
+            return relevance_score >= quality_threshold
+            
         except Exception as e:
-            print(f"Error in hybrid_top_k_search: {e}")
+            print(f"Error in validate_answer_quality: {e}")
+            return True  # Default to accept if validation fails
+    
+    def validate_answer_quality_relaxed(self, user_input: str, answer: str, quality_threshold: float = 0.05) -> bool:
+        """
+        Ultra-relaxed validation - chỉ reject những câu trả lời rõ ràng sai lệch
+        """
+        try:
+            # Preprocess
+            user_processed = self.preprocess_text(user_input)
+            answer_processed = self.preprocess_text(answer)
+            
+            user_words = set(user_processed.split())
+            answer_words = set(answer_processed.split())
+            
+            if not user_words or not answer_words:
+                return True  # Accept if can't validate
+            
+            # Very basic overlap check - chỉ reject nếu hoàn toàn không liên quan
+            intersection = len(user_words & answer_words)
+            overlap_ratio = intersection / len(user_words) if len(user_words) > 0 else 0
+            
+            # Nếu có ít nhất 1 từ chung thì accept
+            if intersection >= 1:
+                return True
+            
+            # Kiểm tra domain consistency - chỉ reject nếu domain hoàn toàn khác
+            domain_words = {
+                'ngành', 'học', 'phí', 'điểm', 'thi', 'phòng', 'sinh', 'viên',
+                'fpt', 'đại', 'trường', 'môn', 'thực', 'tập', 'ojt', 'quy', 'định'
+            }
+            
+            user_domain = user_words & domain_words
+            answer_domain = answer_words & domain_words
+            
+            # Nếu user hỏi về domain education mà answer hoàn toàn không có từ nào liên quan
+            if len(user_domain) >= 2 and len(answer_domain) == 0:
+                return False
+            
+            # Chỉ reject nếu overlap ratio cực kỳ thấp
+            if overlap_ratio < quality_threshold:
+                return False
+            
+            return True
+            
+        except Exception as e:
+            print(f"Error in validate_answer_quality_relaxed: {e}")
+            return True  # Default accept để không giảm accuracy
+    
+    def get_high_quality_response(self, user_input: str) -> str:
+        """
+        Lấy câu trả lời chất lượng cao với minimal validation để giữ accuracy
+        """
+        # Kiểm tra domain relevance với conservative approach
+        if self.detect_irrelevant_question(user_input):
+            return "Xin lỗi, tôi không tìm thấy thông tin phù hợp với câu hỏi của bạn. Vui lòng liên hệ phòng DVSV để được hỗ trợ thêm."
         
-        # Fallback methods với weighted voting
-        fallback_methods = [
-            ('exact_match', 1.0),
-            ('wildcard_match', 0.95),  # High priority for wildcard
-            ('advanced_keyword_match', 0.9),
-            ('phrase_match', 0.8),
-            ('fuzzy_match', 0.7)
+        # Thử từng method theo thứ tự ưu tiên
+        methods = [
+            ('exact_match', self.exact_match),
+            ('hybrid_top_k_search', self.hybrid_top_k_search),
+            ('advanced_keyword_match', self.advanced_keyword_match),
+            ('wildcard_match', self.wildcard_match),
+            ('phrase_match', self.phrase_match),
+            ('fuzzy_match', self.fuzzy_match)
         ]
         
-        results = {}
+        # Lưu trữ answers để fallback
+        candidate_answers = []
         
-        for method_name, weight in fallback_methods:
+        for method_name, method_func in methods:
             try:
-                method = getattr(self, method_name)
-                result = method(user_input)
-                if result:
-                    if result not in results:
-                        results[result] = 0
-                    results[result] += weight
+                answer = method_func(user_input)
+                if answer:
+                    candidate_answers.append((answer, method_name))
+                    
+                    # Chỉ validate với threshold cực kỳ thấp
+                    if self.validate_answer_quality_relaxed(user_input, answer, quality_threshold=0.05):
+                        return answer
+                    # Nếu không pass validation, vẫn lưu lại làm candidate
             except Exception as e:
                 print(f"Error in {method_name}: {e}")
                 continue
         
-        # Return result với highest weighted vote
-        if results:
-            best_result = max(results.items(), key=lambda x: x[1])
-            if best_result[1] >= 0.7:  # Minimum confidence threshold
-                return best_result[0]
+        # Nếu có candidates nhưng không pass validation, trả về candidate đầu tiên
+        # (ưu tiên accuracy hơn precision)
+        if candidate_answers:
+            return candidate_answers[0][0]
         
-        # Final fallback: Chạy từng method riêng lẻ với threshold thấp
-        for method_name, _ in fallback_methods:
-            try:
-                method = getattr(self, method_name)
-                result = method(user_input)
-                if result:
-                    return result
-            except:
-                continue
-        
-        return "Xin lỗi, tôi không tìm thấy thông tin phù hợp với câu hỏi của bạn. Bạn có thể hỏi câu hỏi khác không?"
+        # Chỉ fallback nếu thật sự không có answer nào
+        return "Xin lỗi, tôi không tìm thấy thông tin phù hợp với câu hỏi của bạn. Vui lòng liên hệ phòng DVSV để được hỗ trợ thêm."
+    
+    def get_response(self, user_input: str) -> str:
+        """Optimized response với answer quality validation"""
+        return self.get_high_quality_response(user_input)
 
 # Flask app
 app = Flask(__name__)

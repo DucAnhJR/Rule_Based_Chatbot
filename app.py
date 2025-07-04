@@ -141,11 +141,22 @@ class AdvancedChatbot:
             r'\b(k|ko|không)\b': 'không',
             r'\b(đc|được)\b': 'được',
             r'\b(vs|với)\b': 'với',
-            r'\b(pt|phòng thi)\b': 'phòng thi',
+            r'\b(pt|bài kiểm tra|kiểm tra quá trình)\b': 'bài kiểm tra',
             r'\b(mấy|bao nhiêu)\b': 'bao nhiêu',
             r'\b(tg|thời gian)\b': 'thời gian',
             r'\b(hp|học phí)\b': 'học phí',
             r'\b(hs|học sinh)\b': 'sinh viên',
+            r'\b(ojt|OJT)\b': 'thực tập',
+            r'\b(fe|FE|Điểm cuối kì|Bài thi cuối kì)\b': 'Bài thi cuối kì',
+            r'\b(Midterm|ME|Điểm giữa kì|Bài thi giữa kì)\b': 'Bài thi giữa kì',
+            
+            # Wildcard patterns - Generic question structures
+            r'\b(có|tồn tại|hiện có)\s+(bao nhiêu|mấy|những|các)\b': 'có bao nhiêu',
+            r'\b(cần|phải|yêu cầu)\s+(bao nhiêu|mấy|những gì)\b': 'cần bao nhiêu',
+            r'\b(thời gian|thời hạn|deadline)\s+(bao lâu|như thế nào|ra sao)\b': 'thời gian bao lâu',
+            r'\b(điều kiện|yêu cầu|tiêu chuẩn)\s+(gì|nào|như thế nào)\b': 'điều kiện gì',
+            r'\b(quy định|luật|chính sách)\s+(về|đối với|cho)\b': 'quy định về',
+            r'\b(cách thức|phương pháp|hướng dẫn)\s+(để|cho|nhằm)\b': 'cách thức để',
             
             # Question words standardization
             r'\b(như thế nào|làm sao|cách nào|ra sao)\b': 'như thế nào',
@@ -264,25 +275,108 @@ class AdvancedChatbot:
         return None
     
     def advanced_keyword_match(self, user_input: str) -> Optional[str]:
-        """Enhanced keyword matching với advanced overlap scoring"""
+        """Advanced keyword matching với context-aware scoring"""
         user_processed = self.preprocess_text(user_input)
         user_normalized = self.normalize_question(user_input)
         user_words = set(user_processed.split())
         user_norm_words = set(user_normalized.split())
         
+        # Context-aware important words với dynamic weights
+        context_weights = {
+            'ngành': {'học': 1.5, 'fpt': 1.3, 'đại': 1.2, 'trường': 1.2},
+            'học': {'phí': 1.5, 'ngành': 1.3, 'môn': 1.2, 'cách': 1.2},
+            'phí': {'học': 1.5, 'bao': 1.4, 'nhiêu': 1.4, 'tiền': 1.3},
+            'thi': {'phòng': 1.5, 'điểm': 1.3, 'trễ': 1.4, 'cấm': 1.3},
+            'sinh': {'viên': 1.8, 'học': 1.2, 'trường': 1.2},
+            'fpt': {'ngành': 1.3, 'học': 1.2, 'đại': 1.2, 'trường': 1.2}
+        }
+        
+        # Base important words
+        important_words = {
+            'ngành': 18, 'học': 15, 'phí': 18, 'điểm': 15, 'thi': 15, 'phòng': 12,
+            'sinh': 10, 'viên': 10, 'fpt': 15, 'môn': 12, 'bao': 10, 'nhiêu': 10,
+            'mấy': 10, 'khi': 8, 'ở': 8, 'đâu': 8, 'nào': 6, 'gì': 6,
+            'đại': 10, 'trường': 8, 'thời': 8, 'gian': 8, 'cách': 8, 'làm': 6
+        }
+        
         scored_matches = []
         
         for idx, row in self.data.iterrows():
-            # Use the new keyword overlap scoring function
-            keyword_overlap_score = self.calculate_keyword_overlap_score(user_input, row)
-            
-            # Additional scoring components
-            additional_score = 0
-            
-            # Context-aware matching
             question_words = set(row['processed_question'].split())
+            norm_question_words = set(row['normalized_question'].split())
             
-            # Question pattern matching
+            score = 0
+            
+            # === CONTEXT-AWARE MATCHING ===
+            # Check for context combinations
+            context_bonus = 0
+            for main_word in user_words:
+                if main_word in context_weights:
+                    for context_word, multiplier in context_weights[main_word].items():
+                        if context_word in user_words and main_word in question_words and context_word in question_words:
+                            context_bonus += important_words.get(main_word, 5) * multiplier
+            
+            score += context_bonus
+            
+            # === EXACT MATCHES ===
+            exact_matches = user_words.intersection(question_words)
+            norm_matches = user_norm_words.intersection(norm_question_words)
+            
+            # Score exact matches với context awareness
+            for word in exact_matches:
+                base_score = important_words.get(word, 4)
+                # Boost if word appears in context
+                if word in context_weights:
+                    context_found = any(cw in user_words for cw in context_weights[word].keys())
+                    if context_found:
+                        base_score *= 1.3
+                score += base_score
+            
+            # Score normalized matches
+            for word in norm_matches:
+                if word not in exact_matches:  # Avoid double counting
+                    score += important_words.get(word, 3) * 0.7
+            
+            # === COVERAGE SCORING ===
+            if len(user_words) > 0:
+                coverage = len(exact_matches) / len(user_words)
+                score += coverage * 25
+                
+                # Bonus for high coverage
+                if coverage > 0.7:
+                    score += 15
+            
+            if len(user_norm_words) > 0:
+                norm_coverage = len(norm_matches) / len(user_norm_words)
+                score += norm_coverage * 20
+            
+            # === KEYWORD COLUMN MATCHING ===
+            if row['keywords']:
+                keyword_words = set(str(row['keywords']).lower().split())
+                keyword_matches = user_words.intersection(keyword_words)
+                
+                # Context-aware keyword scoring
+                for word in keyword_matches:
+                    base_score = important_words.get(word, 8) * 2
+                    if word in context_weights:
+                        context_found = any(cw in user_words for cw in context_weights[word].keys())
+                        if context_found:
+                            base_score *= 1.4
+                    score += base_score
+            
+            # === PARTIAL MATCHING ===
+            partial_score = 0
+            for user_word in user_words:
+                if len(user_word) > 3:
+                    for q_word in question_words:
+                        if len(q_word) > 3:
+                            if user_word in q_word or q_word in user_word:
+                                partial_score += 8
+                                break
+            score += partial_score
+            
+            # === QUESTION TYPE MATCHING ===
+            # Identify question patterns
             question_patterns = {
                 'what': ['gì', 'nào', 'những', 'các'],
                 'how_many': ['bao', 'nhiêu', 'mấy'],
@@ -301,223 +395,214 @@ class AdvancedChatbot:
                     row_pattern = pattern
             
             if user_pattern and user_pattern == row_pattern:
-                additional_score += 20
+                score += 15
             
-            # Semantic field matching
-            semantic_fields = {
-                'education': ['ngành', 'học', 'môn', 'đại', 'trường', 'giáo', 'dục', 'sinh', 'viên'],
-                'finance': ['phí', 'tiền', 'chi', 'giá', 'bao', 'nhiêu', 'triệu', 'nghìn'],
-                'examination': ['thi', 'điểm', 'phòng', 'kiểm', 'tra', 'cấm', 'trễ'],
-                'time': ['thời', 'gian', 'giờ', 'phút', 'khi', 'lúc'],
-                'location': ['ở', 'đâu', 'chỗ', 'nơi', 'phòng', 'địa']
-            }
-            
-            user_fields = set()
-            row_fields = set()
-            
-            for field, keywords in semantic_fields.items():
-                if any(keyword in user_words for keyword in keywords):
-                    user_fields.add(field)
-                if any(keyword in question_words for keyword in keywords):
-                    row_fields.add(field)
-            
-            field_overlap = len(user_fields.intersection(row_fields))
-            additional_score += field_overlap * 12
-            
-            # Length and structure similarity
+            # === LENGTH AND STRUCTURE SIMILARITY ===
             len_ratio = min(len(user_input), len(row['question'])) / max(len(user_input), len(row['question']))
-            additional_score += len_ratio * 15
+            score += len_ratio * 8
             
             # Word count similarity
             word_count_ratio = min(len(user_words), len(question_words)) / max(len(user_words), len(question_words))
-            additional_score += word_count_ratio * 10
+            score += word_count_ratio * 5
             
-            # Combine scores
-            total_score = keyword_overlap_score + additional_score
-            
-            if total_score > 25:  # Threshold
-                scored_matches.append((total_score, row['answer'], idx))
+            if score > 20:  # Threshold
+                scored_matches.append((score, row['answer'], idx))
         
-        # Return best match với adaptive threshold
+        # Normalize scores và return best match
         if scored_matches:
             scored_matches.sort(key=lambda x: x[0], reverse=True)
             
+            # Dynamic threshold based on score distribution
             top_score = scored_matches[0][0]
-            
-            # Adaptive threshold based on score range
             if len(scored_matches) > 1:
                 second_score = scored_matches[1][0]
-                score_gap = top_score - second_score
-                
-                if score_gap > 30:  # Large gap
-                    threshold_ratio = 0.3
-                elif score_gap > 15:  # Medium gap
-                    threshold_ratio = 0.5
-                else:  # Small gap
-                    threshold_ratio = 0.7
+                threshold_ratio = 0.4 if top_score > second_score * 1.5 else 0.6
             else:
-                threshold_ratio = 0.4
+                threshold_ratio = 0.5
             
-            max_possible_score = 150  # Estimate based on scoring system
-            threshold = max_possible_score * threshold_ratio
-            
-            if top_score > threshold:
-                return scored_matches[0][1]
+            max_score = max(scored_matches, key=lambda x: x[0])[0]
+            if max_score > 0:
+                normalized_score = scored_matches[0][0] / max_score
+                if normalized_score > threshold_ratio:
+                    return scored_matches[0][1]
         
         return None
     
-    def calculate_keyword_overlap_score(self, user_input: str, row) -> float:
-        """Calculate advanced keyword overlap score"""
+    def wildcard_match(self, user_input: str) -> Optional[str]:
+        """Enhanced wildcard matching cho flexible pattern recognition"""
         user_processed = self.preprocess_text(user_input)
         user_normalized = self.normalize_question(user_input)
-        user_words = set(user_processed.split())
-        user_norm_words = set(user_normalized.split())
+        user_words = user_processed.split()
         
-        # Get question words
-        question_words = set(row['processed_question'].split())
-        norm_question_words = set(row['normalized_question'].split())
+        # Wildcard patterns với scoring
+        wildcard_patterns = [
+            # Educational patterns
+            {
+                'pattern': r'\b(ngành|chuyên ngành|học|đào tạo).*(có|tồn tại|hiện có|bao nhiêu)',
+                'keywords': ['ngành', 'học', 'có', 'bao', 'nhiêu'],
+                'weight': 25,
+                'category': 'education'
+            },
+            {
+                'pattern': r'\b(học phí|chi phí|phí|tiền).*(bao nhiêu|mấy|giá)',
+                'keywords': ['học', 'phí', 'bao', 'nhiêu', 'tiền'],
+                'weight': 25,
+                'category': 'cost'
+            },
+            {
+                'pattern': r'\b(thi|kiểm tra|bài thi).*(phòng|nơi|chỗ|ở đâu)',
+                'keywords': ['thi', 'phòng', 'ở', 'đâu'],
+                'weight': 20,
+                'category': 'exam_location'
+            },
+            {
+                'pattern': r'\b(điểm|kết quả|đánh giá).*(thi|kiểm tra|bài thi)',
+                'keywords': ['điểm', 'thi', 'kết quả'],
+                'weight': 20,
+                'category': 'exam_result'
+            },
+            {
+                'pattern': r'\b(thời gian|giờ|lúc|khi).*(thi|kiểm tra|học|bắt đầu)',
+                'keywords': ['thời', 'gian', 'thi', 'khi'],
+                'weight': 18,
+                'category': 'time'
+            },
+            {
+                'pattern': r'\b(sinh viên|học sinh|sv).*(được|có thể|phải|cần)',
+                'keywords': ['sinh', 'viên', 'được', 'phải'],
+                'weight': 15,
+                'category': 'student_rights'
+            },
+            {
+                'pattern': r'\b(quy định|luật|chính sách|điều kiện).*(về|đối với|cho)',
+                'keywords': ['quy', 'định', 'về', 'điều', 'kiện'],
+                'weight': 15,
+                'category': 'rules'
+            },
+            {
+                'pattern': r'\b(cách|phương pháp|hướng dẫn).*(để|cho|nhằm|thực hiện)',
+                'keywords': ['cách', 'để', 'thực', 'hiện'],
+                'weight': 12,
+                'category': 'procedure'
+            },
+            # Advanced patterns
+            {
+                'pattern': r'\b(trễ|muộn|chậm).*(bao nhiêu|mấy|thời gian)',
+                'keywords': ['trễ', 'bao', 'nhiêu', 'thời', 'gian'],
+                'weight': 22,
+                'category': 'late_policy'
+            },
+            {
+                'pattern': r'\b(cấm|không được|bị cấm).*(gì|nào|hành vi)',
+                'keywords': ['cấm', 'không', 'được', 'gì', 'hành', 'vi'],
+                'weight': 20,
+                'category': 'prohibited'
+            },
+            {
+                'pattern': r'\b(fpt|đại học|trường).*(có|tồn tại|hiện có)',
+                'keywords': ['fpt', 'đại', 'học', 'có'],
+                'weight': 18,
+                'category': 'university'
+            },
+            {
+                'pattern': r'\b(thực tập|ojt|internship).*(như thế nào|cách|thời gian)',
+                'keywords': ['thực', 'tập', 'như', 'thế', 'nào'],
+                'weight': 20,
+                'category': 'internship'
+            }
+        ]
         
-        # Advanced keyword importance với context
-        high_importance_keywords = {
-            'ngành': 25, 'học': 20, 'phí': 25, 'điểm': 22, 'thi': 22, 'phòng': 18,
-            'sinh': 15, 'viên': 15, 'fpt': 22, 'môn': 18, 'bao': 15, 'nhiêu': 15,
-            'đại': 15, 'trường': 12, 'thời': 15, 'gian': 15, 'cách': 12, 'làm': 10
-        }
+        best_matches = []
         
-        medium_importance_keywords = {
-            'khi': 12, 'ở': 12, 'đâu': 12, 'nào': 10, 'gì': 10, 'như': 10, 'thế': 10,
-            'được': 8, 'không': 8, 'với': 6, 'và': 6, 'có': 8, 'là': 6, 'của': 6,
-            'trong': 8, 'cho': 6, 'về': 6, 'từ': 6, 'theo': 6, 'để': 6
-        }
-        
-        # 1. EXACT KEYWORD OVERLAP
-        exact_overlap = user_words.intersection(question_words)
-        norm_overlap = user_norm_words.intersection(norm_question_words)
-        
-        overlap_score = 0
-        
-        # Score exact matches với trọng số
-        for word in exact_overlap:
-            if word in high_importance_keywords:
-                overlap_score += high_importance_keywords[word]
-            elif word in medium_importance_keywords:
-                overlap_score += medium_importance_keywords[word]
-            else:
-                overlap_score += 5  # Base score
-        
-        # Score normalized matches (với penalty để tránh double counting)
-        for word in norm_overlap:
-            if word not in exact_overlap:
-                if word in high_importance_keywords:
-                    overlap_score += high_importance_keywords[word] * 0.7
-                elif word in medium_importance_keywords:
-                    overlap_score += medium_importance_keywords[word] * 0.7
-                else:
-                    overlap_score += 3
-        
-        # 2. KEYWORD COLUMN OVERLAP
-        keyword_column_score = 0
-        if row['keywords']:
-            keyword_words = set(str(row['keywords']).lower().split())
-            keyword_overlap = user_words.intersection(keyword_words)
+        for idx, row in self.data.iterrows():
+            question_processed = row['processed_question']
+            question_normalized = row['normalized_question']
+            question_words = set(question_processed.split())
             
-            for word in keyword_overlap:
-                if word in high_importance_keywords:
-                    keyword_column_score += high_importance_keywords[word] * 1.5
-                elif word in medium_importance_keywords:
-                    keyword_column_score += medium_importance_keywords[word] * 1.3
-                else:
-                    keyword_column_score += 8
-        
-        # 3. COVERAGE METRICS
-        coverage_score = 0
-        if len(user_words) > 0:
-            # User coverage (how many user words are covered)
-            user_coverage = len(exact_overlap) / len(user_words)
-            coverage_score += user_coverage * 30
+            total_score = 0
+            matched_patterns = []
             
-            # High coverage bonus
-            if user_coverage > 0.8:
-                coverage_score += 20
-            elif user_coverage > 0.6:
-                coverage_score += 10
-        
-        if len(question_words) > 0:
-            # Question coverage (how many question words match)
-            question_coverage = len(exact_overlap) / len(question_words)
-            coverage_score += question_coverage * 25
-        
-        # 4. PARTIAL KEYWORD MATCHING
-        partial_score = 0
-        for user_word in user_words:
-            if len(user_word) > 4:  # Only for longer words
-                for q_word in question_words:
-                    if len(q_word) > 4:
-                        # Substring matching
-                        if user_word in q_word or q_word in user_word:
-                            if user_word in high_importance_keywords or q_word in high_importance_keywords:
-                                partial_score += 12
-                            else:
-                                partial_score += 6
-                            break
-        
-        # 5. KEYWORD DENSITY MATCHING
-        density_score = 0
-        user_total_words = len(user_processed.split())
-        question_total_words = len(row['processed_question'].split())
-        
-        if user_total_words > 0 and question_total_words > 0:
-            user_keyword_density = len(exact_overlap) / user_total_words
-            question_keyword_density = len(exact_overlap) / question_total_words
+            # Test against each wildcard pattern
+            for pattern_info in wildcard_patterns:
+                pattern = pattern_info['pattern']
+                keywords = pattern_info['keywords']
+                weight = pattern_info['weight']
+                category = pattern_info['category']
+                
+                # Check if pattern matches user input
+                user_match = re.search(pattern, user_processed, re.IGNORECASE)
+                question_match = re.search(pattern, question_processed, re.IGNORECASE)
+                
+                if user_match or question_match:
+                    # Score based on keyword overlap
+                    keyword_overlap = 0
+                    for keyword in keywords:
+                        if keyword in user_processed and keyword in question_processed:
+                            keyword_overlap += 1
+                    
+                    if keyword_overlap > 0:
+                        pattern_score = weight * (keyword_overlap / len(keywords))
+                        total_score += pattern_score
+                        matched_patterns.append((category, pattern_score))
             
-            # Reward similar keyword density
-            density_diff = abs(user_keyword_density - question_keyword_density)
-            if density_diff < 0.2:
-                density_score += 15
-            elif density_diff < 0.4:
-                density_score += 8
+            # Additional scoring for direct keyword matches
+            user_word_set = set(user_processed.split())
+            question_word_set = set(question_processed.split())
+            
+            # Important word boosting
+            important_words = {
+                'ngành': 15, 'học': 12, 'phí': 18, 'thi': 15, 'điểm': 15,
+                'phòng': 12, 'sinh': 10, 'viên': 10, 'fpt': 15, 'thời': 10,
+                'gian': 10, 'cách': 8, 'quy': 8, 'định': 8, 'thực': 12, 'tập': 12
+            }
+            
+            for word in user_word_set.intersection(question_word_set):
+                if word in important_words:
+                    total_score += important_words[word]
+            
+            # Coverage bonus
+            if len(user_word_set) > 0:
+                coverage = len(user_word_set.intersection(question_word_set)) / len(user_word_set)
+                total_score += coverage * 20
+            
+            # Pattern diversity bonus
+            unique_categories = set(cat for cat, _ in matched_patterns)
+            if len(unique_categories) > 1:
+                total_score += 10
+            
+            # Keyword column matching
+            if row['keywords']:
+                keyword_words = set(str(row['keywords']).lower().split())
+                keyword_matches = user_word_set.intersection(keyword_words)
+                if keyword_matches:
+                    total_score += len(keyword_matches) * 15
+            
+            if total_score > 25:  # Threshold for wildcard matching
+                best_matches.append((total_score, row['answer'], idx, matched_patterns))
         
-        # 6. CONTEXT-AWARE KEYWORD BOOSTING
-        context_bonus = 0
+        # Return best match
+        if best_matches:
+            best_matches.sort(key=lambda x: x[0], reverse=True)
+            best_match = best_matches[0]
+            
+            # Additional validation
+            if len(best_matches) > 1:
+                top_score = best_match[0]
+                second_score = best_matches[1][0]
+                
+                # If top score is significantly better
+                if top_score > second_score * 1.2:
+                    return best_match[1]
+                elif top_score > 40:  # High confidence threshold
+                    return best_match[1]
+            elif best_match[0] > 30:  # Single match threshold
+                return best_match[1]
         
-        # Educational context
-        edu_keywords = {'ngành', 'học', 'môn', 'đại', 'trường', 'giáo', 'dục'}
-        if any(word in user_words for word in edu_keywords) and any(word in question_words for word in edu_keywords):
-            context_bonus += 15
-        
-        # Financial context
-        fin_keywords = {'phí', 'tiền', 'chi', 'giá', 'bao', 'nhiêu'}
-        if any(word in user_words for word in fin_keywords) and any(word in question_words for word in fin_keywords):
-            context_bonus += 15
-        
-        # Exam context
-        exam_keywords = {'thi', 'điểm', 'phòng', 'kiểm', 'tra'}
-        if any(word in user_words for word in exam_keywords) and any(word in question_words for word in exam_keywords):
-            context_bonus += 15
-        
-        # 7. RARE KEYWORD BONUS
-        rare_bonus = 0
-        # Count frequency of each word in dataset to identify rare keywords
-        for word in exact_overlap:
-            if len(word) > 6:  # Longer words are often more specific
-                rare_bonus += 8
-        
-        # TOTAL SCORE
-        total_score = (
-            overlap_score * 0.4 +           # 40% - Direct overlap
-            keyword_column_score * 0.25 +   # 25% - Keyword column
-            coverage_score * 0.15 +         # 15% - Coverage
-            partial_score * 0.1 +           # 10% - Partial matching
-            density_score * 0.05 +          # 5% - Density
-            context_bonus * 0.03 +          # 3% - Context
-            rare_bonus * 0.02               # 2% - Rare words
-        )
-        
-        return total_score
-    
+        return None
+
     def hybrid_top_k_search(self, user_input: str) -> Optional[str]:
-        """Enhanced Hybrid Top-K search với advanced keyword overlap"""
-        candidates = self.top_k_semantic_search(user_input, k=15)  # Tăng lên 15 để có nhiều candidates hơn
+        """Hybrid Top-K search với fuzzy + keyword reranking"""
+        candidates = self.top_k_semantic_search(user_input, k=12)
         
         if not candidates:
             return None
@@ -525,153 +610,152 @@ class AdvancedChatbot:
         # Prepare user features
         user_processed = self.preprocess_text(user_input)
         user_normalized = self.normalize_question(user_input)
-        user_words = set(user_processed.split())
-        user_words_list = user_processed.split()
+        user_words = set(user_processed.split())  # set for intersection operations
+        user_words_list = user_processed.split()  # list for slicing
         user_norm_words = set(user_normalized.split())
         
-        # Re-rank candidates với enhanced scoring
+        # Important words with higher weights
+        important_words = {
+            'ngành': 20, 'học': 15, 'phí': 20, 'điểm': 18, 'thi': 18, 'phòng': 15,
+            'sinh': 12, 'viên': 12, 'fpt': 18, 'môn': 15, 'bao': 12, 'nhiêu': 12,
+            'khi': 10, 'ở': 10, 'đâu': 10, 'nào': 8, 'gì': 8, 'như': 8,
+            'đại': 12, 'trường': 10, 'thời': 10, 'gian': 10, 'cách': 8
+        }
+        
+        # Re-rank candidates với advanced scoring
         reranked_candidates = []
         
         for idx, semantic_score in candidates:
             row = self.data.iloc[idx]
             
-            # === COMPONENT SCORES ===
+            # Initialize component scores
+            fuzzy_score = 0
+            keyword_score = 0
+            context_score = 0
             
-            # 1. Semantic Score (normalized)
+            # === FUZZY MATCHING COMPONENT ===
+            question_words = set(row['processed_question'].split())
+            norm_question_words = set(row['normalized_question'].split())
+            
+            if user_words and question_words:
+                # Multiple similarity metrics
+                intersection = len(user_words & question_words)
+                union = len(user_words | question_words)
+                jaccard = intersection / union if union > 0 else 0
+                
+                # Containment in both directions
+                containment1 = intersection / len(user_words) if len(user_words) > 0 else 0
+                containment2 = intersection / len(question_words) if len(question_words) > 0 else 0
+                
+                # Normalized word overlap
+                norm_intersection = len(user_norm_words & norm_question_words)
+                norm_union = len(user_norm_words | norm_question_words)
+                norm_jaccard = norm_intersection / norm_union if norm_union > 0 else 0
+                
+                # Dice coefficient
+                dice = 2 * intersection / (len(user_words) + len(question_words)) if (len(user_words) + len(question_words)) > 0 else 0
+                
+                # Combined fuzzy score
+                fuzzy_score = (
+                    jaccard * 0.35 + 
+                    containment1 * 0.25 + 
+                    containment2 * 0.15 + 
+                    norm_jaccard * 0.2 + 
+                    dice * 0.05
+                )
+            
+            # === KEYWORD MATCHING COMPONENT ===
+            # Important word matches
+            important_matches = 0
+            for word in user_words:
+                if word in important_words:
+                    if word in question_words:
+                        important_matches += important_words[word]
+            
+            # Regular word matches
+            regular_matches = len(user_words & question_words) * 5
+            
+            # Keyword column matches
+            keyword_matches = 0
+            if row['keywords']:
+                keyword_words = set(str(row['keywords']).lower().split())
+                keyword_overlap = len(user_words.intersection(keyword_words))
+                keyword_matches = keyword_overlap * 25
+            
+            # Phrase matches
+            phrase_matches = 0
+            user_text = user_processed
+            question_text = row['processed_question']
+            
+            # N-gram matches - use user_words_list for slicing
+            for n in range(2, min(5, len(user_words_list) + 1)):
+                user_ngrams = [' '.join(user_words_list[i:i+n]) for i in range(len(user_words_list) - n + 1)]
+                for ngram in user_ngrams:
+                    if ngram in question_text:
+                        phrase_matches += n * 8
+            
+            # Substring matches
+            if len(user_normalized) > 4 and user_normalized in row['normalized_question']:
+                phrase_matches += 30
+            
+            keyword_score = (important_matches + regular_matches + keyword_matches + phrase_matches) / 100
+            
+            # === CONTEXT SCORING ===
+            # Length similarity
+            len_ratio = min(len(user_input), len(row['question'])) / max(len(user_input), len(row['question']))
+            context_score += len_ratio * 0.3
+            
+            # Question type similarity
+            user_question_words = {'gì', 'nào', 'bao', 'nhiêu', 'khi', 'ở', 'đâu', 'như', 'thế', 'sao'}
+            user_has_question = any(word in user_words for word in user_question_words)
+            row_has_question = any(word in question_words for word in user_question_words)
+            
+            if user_has_question and row_has_question:
+                context_score += 0.2
+            
+            # === FINAL SCORING ===
+            # Normalize semantic score (0-1)
             normalized_semantic = min(semantic_score, 1.0)
             
-            # 2. Advanced Keyword Overlap Score
-            keyword_overlap_score = self.calculate_keyword_overlap_score(user_input, row)
-            
-            # 3. Fuzzy Similarity Score
-            fuzzy_score = self._calculate_fuzzy_score(user_words, user_norm_words, row)
-            
-            # 4. Phrase Matching Score
-            phrase_score = self._calculate_phrase_score(user_input, user_words_list, row)
-            
-            # 5. Context Score
-            context_score = self._calculate_context_score(user_input, row)
-            
-            # === WEIGHTED COMBINATION ===
-            # Tăng trọng số cho keyword overlap
+            # Weighted combination
             final_score = (
-                normalized_semantic * 0.3 +     # 30% - Semantic
-                keyword_overlap_score * 0.35 +  # 35% - Keyword Overlap (tăng từ 20%)
-                fuzzy_score * 0.2 +             # 20% - Fuzzy
-                phrase_score * 0.1 +            # 10% - Phrase
-                context_score * 0.05            # 5% - Context
+                normalized_semantic * 0.4 +  # Semantic base
+                fuzzy_score * 0.35 +         # Fuzzy similarity
+                keyword_score * 0.2 +        # Keyword matching
+                context_score * 0.05         # Context bonus
             )
             
-            # === BOOSTING LOGIC ===
-            # Boost cho multiple high scores
-            high_scores = sum([
-                normalized_semantic > 0.4,
-                keyword_overlap_score > 30,
-                fuzzy_score > 0.3,
-                phrase_score > 20
-            ])
-            
-            if high_scores >= 3:
-                final_score *= 1.2
-            elif high_scores >= 2:
-                final_score *= 1.1
-            
-            # Boost cho perfect keyword matches
-            if keyword_overlap_score > 50:
+            # Boost for multiple high scores
+            if fuzzy_score > 0.4 and keyword_score > 0.3:
                 final_score *= 1.15
+            
+            if normalized_semantic > 0.3 and fuzzy_score > 0.3:
+                final_score *= 1.1
             
             reranked_candidates.append((final_score, row['answer'], idx))
         
-        # Return best candidate với dynamic threshold
+        # Return best candidate
         if reranked_candidates:
             reranked_candidates.sort(key=lambda x: x[0], reverse=True)
             best_candidate = reranked_candidates[0]
             
-            # Adaptive threshold
+            # Dynamic threshold based on top candidates
             if len(reranked_candidates) > 1:
                 top_score = best_candidate[0]
                 second_score = reranked_candidates[1][0]
                 
-                # Lower threshold if significantly better
-                if top_score > second_score * 1.4:
-                    threshold = 0.12
-                elif top_score > second_score * 1.2:
-                    threshold = 0.18
+                # If top score is significantly better, lower threshold
+                if top_score > second_score * 1.3:
+                    threshold = 0.15
                 else:
                     threshold = 0.25
             else:
-                threshold = 0.15
+                threshold = 0.2
             
             if best_candidate[0] > threshold:
                 return best_candidate[1]
         
         return None
-    
-    def _calculate_fuzzy_score(self, user_words: set, user_norm_words: set, row) -> float:
-        """Calculate fuzzy similarity score"""
-        question_words = set(row['processed_question'].split())
-        norm_question_words = set(row['normalized_question'].split())
-        
-        if not user_words or not question_words:
-            return 0.0
-        
-        # Multiple similarity metrics
-        intersection = len(user_words & question_words)
-        union = len(user_words | question_words)
-        jaccard = intersection / union if union > 0 else 0
-        
-        containment1 = intersection / len(user_words) if len(user_words) > 0 else 0
-        containment2 = intersection / len(question_words) if len(question_words) > 0 else 0
-        
-        norm_intersection = len(user_norm_words & norm_question_words)
-        norm_union = len(user_norm_words | norm_question_words)
-        norm_jaccard = norm_intersection / norm_union if norm_union > 0 else 0
-        
-        dice = 2 * intersection / (len(user_words) + len(question_words)) if (len(user_words) + len(question_words)) > 0 else 0
-        
-        return (jaccard * 0.35 + containment1 * 0.25 + containment2 * 0.15 + norm_jaccard * 0.2 + dice * 0.05)
-    
-    def _calculate_phrase_score(self, user_input: str, user_words_list: list, row) -> float:
-        """Calculate phrase matching score"""
-        user_processed = self.preprocess_text(user_input)
-        user_normalized = self.normalize_question(user_input)
-        question_text = row['processed_question']
-        
-        score = 0
-        
-        # N-gram matches
-        for n in range(2, min(6, len(user_words_list) + 1)):
-            for i in range(len(user_words_list) - n + 1):
-                ngram = ' '.join(user_words_list[i:i+n])
-                if ngram in question_text:
-                    score += n * 10
-        
-        # Substring matches
-        if len(user_normalized) > 4 and user_normalized in row['normalized_question']:
-            score += 35
-        
-        return score
-    
-    def _calculate_context_score(self, user_input: str, row) -> float:
-        """Calculate context similarity score"""
-        score = 0
-        
-        # Length similarity
-        len_ratio = min(len(user_input), len(row['question'])) / max(len(user_input), len(row['question']))
-        score += len_ratio * 0.3
-        
-        # Question type similarity
-        user_words = set(self.preprocess_text(user_input).split())
-        question_words = set(row['processed_question'].split())
-        
-        user_question_words = {'gì', 'nào', 'bao', 'nhiêu', 'khi', 'ở', 'đâu', 'như', 'thế', 'sao'}
-        user_has_question = any(word in user_words for word in user_question_words)
-        row_has_question = any(word in question_words for word in user_question_words)
-        
-        if user_has_question and row_has_question:
-            score += 0.2
-        
-        return score
     
     def ensemble_semantic_search(self, user_input: str) -> Optional[str]:
         """Ensemble semantic search với top-k - keep for backward compatibility"""
@@ -872,11 +956,11 @@ class AdvancedChatbot:
         return best_match
     
     def get_response(self, user_input: str) -> str:
-        """Enhanced response với keyword overlap optimization"""
+        """Enhanced response với hybrid top-k approach"""
         if not user_input.strip():
             return "Xin chào! Tôi có thể giúp gì cho bạn?"
         
-        # Primary method: Enhanced Hybrid Top-K search
+        # Primary method: Hybrid Top-K search
         try:
             result = self.hybrid_top_k_search(user_input)
             if result:
@@ -884,18 +968,11 @@ class AdvancedChatbot:
         except Exception as e:
             print(f"Error in hybrid_top_k_search: {e}")
         
-        # Secondary: Enhanced keyword overlap voting
-        try:
-            keyword_result = self._keyword_overlap_ensemble(user_input)
-            if keyword_result:
-                return keyword_result
-        except Exception as e:
-            print(f"Error in keyword_overlap_ensemble: {e}")
-        
-        # Fallback methods với enhanced weighted voting
+        # Fallback methods với weighted voting
         fallback_methods = [
             ('exact_match', 1.0),
-            ('advanced_keyword_match', 0.95),  # Tăng trọng số
+            ('wildcard_match', 0.95),  # High priority for wildcard
+            ('advanced_keyword_match', 0.9),
             ('phrase_match', 0.8),
             ('fuzzy_match', 0.7)
         ]
@@ -917,10 +994,10 @@ class AdvancedChatbot:
         # Return result với highest weighted vote
         if results:
             best_result = max(results.items(), key=lambda x: x[1])
-            if best_result[1] >= 0.7:  # Confidence threshold
+            if best_result[1] >= 0.7:  # Minimum confidence threshold
                 return best_result[0]
         
-        # Final fallback với lower threshold
+        # Final fallback: Chạy từng method riêng lẻ với threshold thấp
         for method_name, _ in fallback_methods:
             try:
                 method = getattr(self, method_name)
@@ -931,76 +1008,6 @@ class AdvancedChatbot:
                 continue
         
         return "Xin lỗi, tôi không tìm thấy thông tin phù hợp với câu hỏi của bạn. Bạn có thể hỏi câu hỏi khác không?"
-    
-    def _keyword_overlap_ensemble(self, user_input: str) -> Optional[str]:
-        """Ensemble method focusing on keyword overlap"""
-        # Get top candidates từ multiple methods
-        candidates = []
-        
-        # Get semantic candidates
-        semantic_candidates = self.top_k_semantic_search(user_input, k=10)
-        for idx, score in semantic_candidates:
-            candidates.append((idx, 'semantic', score))
-        
-        # Get keyword candidates by scoring all data
-        user_words = set(self.preprocess_text(user_input).split())
-        
-        # Quick keyword screening
-        for idx, row in self.data.iterrows():
-            question_words = set(row['processed_question'].split())
-            overlap = len(user_words.intersection(question_words))
-            
-            if overlap >= 2:  # At least 2 common words
-                keyword_score = self.calculate_keyword_overlap_score(user_input, row)
-                if keyword_score > 20:
-                    candidates.append((idx, 'keyword', keyword_score))
-        
-        # Remove duplicates và rank all candidates
-        seen_indices = set()
-        unique_candidates = []
-        
-        for idx, method, score in candidates:
-            if idx not in seen_indices:
-                seen_indices.add(idx)
-                # Normalize scores based on method
-                if method == 'semantic':
-                    normalized_score = score * 100  # Scale up semantic scores
-                else:
-                    normalized_score = score
-                
-                unique_candidates.append((idx, normalized_score))
-        
-        # Re-rank với keyword overlap priority
-        final_candidates = []
-        for idx, score in unique_candidates:
-            row = self.data.iloc[idx]
-            
-            # Enhanced scoring
-            keyword_overlap_score = self.calculate_keyword_overlap_score(user_input, row)
-            fuzzy_score = self._calculate_fuzzy_score(
-                set(self.preprocess_text(user_input).split()),
-                set(self.normalize_question(user_input).split()),
-                row
-            ) * 100
-            
-            # Weighted final score
-            final_score = (
-                keyword_overlap_score * 0.6 +  # High weight on keyword overlap
-                fuzzy_score * 0.25 +
-                score * 0.15
-            )
-            
-            final_candidates.append((final_score, row['answer']))
-        
-        # Return best candidate
-        if final_candidates:
-            final_candidates.sort(key=lambda x: x[0], reverse=True)
-            best_score, best_answer = final_candidates[0]
-            
-            if best_score > 30:  # Threshold for keyword overlap ensemble
-                return best_answer
-        
-        return None
 
 # Flask app
 app = Flask(__name__)
